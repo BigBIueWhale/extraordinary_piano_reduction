@@ -33,14 +33,20 @@ compositional form, and piano performance:
        Notice that the signature 3+3+2 tresillo falls naturally on
        (B1, B1_A, B2_AND) and (B3, B3_A, B4_AND).
 
-  3. Compositional Functors & Section Generators:
+  3. Compositional Functors, Ergonomic Voicings & Section Generators:
      The 116-measure piece is a composition of modular section generators
-     built from 6 left-hand accompaniment functors and 5 right-hand voicing
-     operators (`N`, `Oct`, `SixthOct`, `FourthOct`, `Roll`).
+     built from 8 left-hand accompaniment functors and 6 right-hand voicing &
+     ornamental operators (`N`, `Oct`, `SixthOct`, `FourthOct`, `Roll`,
+     `pentatonic_cascade`). Every unrolled chord in both hands spans at most
+     one octave (`<= 12` semitones), and cross-barline syncopations are held
+     continuously across barlines in both the MIDI performance and the
+     engraved Urtext sheet music.
 
-  4. Virtual Pianist & 96 kHz Physical/Acoustic Mastering Pipeline:
+  4. Virtual Pianist, Classical Urtext Engraving & 96 kHz Mastering Pipeline:
      - Single canonical mode of operation with strict defensive assertions and
-       zero fallbacks.
+       zero fallbacks, guaranteeing a 1:1 bijection between the symbolic score,
+       the LilyPond Urtext sheet music (`extraordinary_sheet_music.png`), and
+       the Virtual Pianist MIDI performance (`extraordinary.mid`).
      - Time is integrated from section tempo markings (BPM), phrase-arch agogic
        breathing, and cadence ritardandos — zero hard-coded audio timestamps.
      - Dynamics are derived from musical markings (pp, p, mp, mf, f, ff),
@@ -192,7 +198,7 @@ def Roll(step: float, duration: float, pitches: List[int]) -> Event:
 def pentatonic_cascade(start_name: str, end_name: str, start_step: float, rate: float = T) -> List[Event]:
     """
     Generate a C-minor pentatonic waterfall (ascending or descending)
-    between start_name and end_name at uniform subdivision `rate`.
+    between start_name and end_name at uniform rational subdivision `rate`.
     """
     p_start, p_end = pitch(start_name), pitch(end_name)
     direction = 1 if p_end >= p_start else -1
@@ -201,7 +207,7 @@ def pentatonic_cascade(start_name: str, end_name: str, start_step: float, rate: 
         if (p % 12) in C_MINOR_PENTATONIC
     ]
     return [
-        Event(start_step + i * rate, rate * 1.5, [p])
+        Event(start_step + i * rate, rate, [p])
         for i, p in enumerate(pitches)
     ]
 
@@ -225,20 +231,20 @@ class Measure:
 
 def lh_verse_pedal(harmony: str) -> List[Event]:
     """
-    Verse 1 & Verse 2 tonic-pedal accompaniment over C2+C3:
-      - 'Cm'        : C2+C3 on Beat 1, G3 on Beat 3
-      - 'Bb/C'      : C2+C3+F3+Bb3 on Beat 1, F3+Bb3 on Beat 3
-      - 'Ab/C'      : C2+Eb3+Ab3 on Beat 1, Eb3+Ab3 on Beat 3, Eb3+Bb3 pickup
+    Verse 1 & Verse 2 tonic-pedal accompaniment over C2+C3 (<= 1 octave span):
+      - 'Cm'        : C2+G2+C3 on Beat 1, G3 on Beat 3
+      - 'Bb/C'      : C2+Bb2+C3 on Beat 1, F3+Bb3 on Beat 3
+      - 'Ab/C'      : C2+Ab2+C3 on Beat 1, Eb3+Ab3 on Beat 3, Eb3+Bb3 pickup
       - 'Bb_cadence': Ab3 suspension on Beat 1 -> Bb2+F3+Bb3 on Beat 3
-      - 'F/C'       : C2+C3 on Beat 1, Dorian countermelody A3 - F3 - A3 on Beats 3-4
+      - 'F/C'       : C2+C3 whole-note pedal with Dorian countermelody A3 - F3 - A3 on Beats 3-4
     """
     if harmony == "Cm":
-        return E_seq([(B1, H, N("C2", "C3")), (B3, H, N("G3"))])
+        return E_seq([(B1, H, N("C2", "G2", "C3")), (B3, H, N("G3"))])
     if harmony == "Bb/C":
-        return E_seq([(B1, H, N("C2", "C3", "F3", "Bb3")), (B3, H, N("F3", "Bb3"))])
+        return E_seq([(B1, H, N("C2", "Bb2", "C3")), (B3, H, N("F3", "Bb3"))])
     if harmony == "Ab/C":
         return E_seq([
-            (B1, H, N("C2", "Eb3", "Ab3")),
+            (B1, H, N("C2", "Ab2", "C3")),
             (B3, DQ, N("Eb3", "Ab3")),
             (B4_AND, E, N("Eb3", "Bb3")),
         ])
@@ -303,7 +309,7 @@ def lh_chorus_drive(root_name: str, omit_last: bool = False) -> List[Event]:
     backbeat = [r + 19, r + 24] if low_register else [r + 12, r + 19]
     step6 = [r + 12] if low_register else [r + 7]
     seq = [
-        (B1,     Q, [r, r + 12]),
+        (B1,     E, [r, r + 12]),
         (B1_AND, E, [r + 7]),
         (B2,     E, [r + 12]),
         (B2_AND, E, step6),
@@ -331,21 +337,21 @@ def lh_f_dorian_sweep() -> List[Event]:
         (B3_E,   S, N("A2")),
         (B3_AND, S, N("C3")),
         (B3_A,   S, N("F3")),
-        (B4,     E, N("A3")),
+        (B4,     Q, N("A3")),
     ])
 
 
 def lh_breakthrough_ostinato(chord_type: str = "Cm", driving_pulse: bool = True) -> List[Event]:
     """
     Martial eighth-note ostinato for Han Li's Nascent Soul Breakthrough (Bars 57-63):
-    Resonant C2+G2+C3 downbeats with relentless G2+C3+G3 eighth-note pulse.
+    Resonant 1-octave tonic-pedal downbeats with relentless G2+C3+G3 eighth-note pulse.
     """
     downbeat = {
         "Cm":   N("C2", "G2", "C3"),
-        "Bb/C": N("C2", "G2", "C3", "Bb3"),
-        "Ab/C": N("C2", "G2", "C3", "Eb3", "Ab3"),
+        "Bb/C": N("C2", "Bb2", "C3"),
+        "Ab/C": N("C2", "Ab2", "C3"),
     }[chord_type]
-    seq = [(B1, DQ, downbeat)]
+    seq = [(B1, E if driving_pulse else Q, downbeat)]
     steps = EIGHTH_STEPS[1:] if driving_pulse else EIGHTH_STEPS[2:]
     for s in steps:
         pulse = N("G2", "C3", "G3") if s in (B3, B4) else N("G2", "G3")
@@ -360,7 +366,7 @@ def lh_climax_arpeggio(root_name: str, tresillo_punch: bool = False, high_span: 
     """
     r = pitch(root_name)
     if r < pitch("C2"):
-        apex = [r + 19, r + 24, r + 31] if high_span else [r + 19, r + 24]
+        apex = [r + 16, r + 19, r + 24] if high_span else [r + 19, r + 24]
         seq = [
             (B1,     DE if tresillo_punch else DQ, [r, r + 12]),
             (B2_AND, E,  [r + 19, r + 24]),
@@ -409,7 +415,7 @@ def lh_climax_wave(root_name: str, beat4_bass: List[int] = None) -> List[Event]:
       Beat 1&  (E): [R+7]
       Beat 2   (E): [R+12]
       Beat 2&  (E): [R+19]
-      Beat 3   (E): [R+24, R+31]
+      Beat 3   (E): [R+19, R+24]
       Beat 3&  (E): [R+19]
       Beat 4   (Q): [R+12, R+19] (or custom passing bass on Beat 4)
     """
@@ -420,7 +426,7 @@ def lh_climax_wave(root_name: str, beat4_bass: List[int] = None) -> List[Event]:
         (B1_AND, E, [r + 7]),
         (B2,     E, [r + 12]),
         (B2_AND, E, [r + 19]),
-        (B3,     E, [r + 24, r + 31]),
+        (B3,     E, [r + 19, r + 24]),
         (B3_AND, E, [r + 19]),
         (B4,     Q, b4_notes),
     ])
@@ -432,15 +438,30 @@ def lh_climax_wave(root_name: str, beat4_bass: List[int] = None) -> List[Event]:
 
 # The signature 8-eighth-note pentatonic motif of "Extraordinary (不凡)":
 #   F5 - Eb5 - C5 - G5 - F5 - Eb5 - C5 - Bb4
+# The final Bb4 on Beat 4& (B4_AND) is a syncopated anticipation that ties
+# across the barline onto Beat 1 of the following measure (Bb / Cm7 / Gm7).
 MAIN_THEME_PITCHES = ("F5", "Eb5", "C5", "G5", "F5", "Eb5", "C5", "Bb4")
 MAIN_THEME_HIGH    = ("F6", "Eb6", "C6", "G6", "F6", "Eb6", "C6", "Bb5")
 
 
-def rh_main_theme(octave_doubled: bool = False, high_octaves: bool = False) -> List[Event]:
-    """Generate the 8-eighth-note main theme in single notes or octaves."""
+def rh_main_theme(octave_doubled: bool = False, high_octaves: bool = False, tie_across_barline: bool = True) -> List[Event]:
+    """Generate the 8-eighth-note main theme in single notes or octaves, tying Beat 4& across the barline."""
     pitches = MAIN_THEME_HIGH if high_octaves else MAIN_THEME_PITCHES
     fn = Oct if (octave_doubled or high_octaves) else N
-    return [Event(s, E, fn(p)) for s, p in zip(EIGHTH_STEPS, pitches)]
+    return [
+        Event(s, (Q if (s == B4_AND and tie_across_barline) else E), fn(p))
+        for s, p in zip(EIGHTH_STEPS, pitches)
+    ]
+
+
+def rh_main_theme_answer(pickup_note: str = "F4") -> List[Event]:
+    """2nd bar of the Main Theme (Bars 2, 6, 42, 46, 110, 114), following the tied Bb4 on Beat 1."""
+    return E_seq([
+        (B1_AND, Q,  N("F4")),
+        (B2_AND, DQ, N("G4")),
+        (B4,     DE, N("Bb4")),
+        (B4_A,   S,  N(pickup_note)),
+    ])
 
 
 def rh_pickup_cascade(start_step: float = B4_AND) -> List[Event]:
@@ -448,8 +469,15 @@ def rh_pickup_cascade(start_step: float = B4_AND) -> List[Event]:
     return pentatonic_cascade("Eb6", "G5", start_step, rate=T)
 
 
-def rh_f_dorian_pickup() -> List[Event]:
-    """4-note 16th-note pickup on Beat 4 of the F-Dorian sweep bar: C4 - Eb4 - Ab4 - Bb4."""
+def rh_f_dorian_pickup(high_register: bool = False) -> List[Event]:
+    """4-note 16th-note pickup on Beat 4 of the F-Dorian sweep bar leading into the Chorus."""
+    if high_register:
+        return E_seq([
+            (B4,     S, N("C5")),
+            (B4_E,   S, N("Eb5")),
+            (B4_AND, S, N("Ab5")),
+            (B4_A,   S, N("Bb5")),
+        ])
     return E_seq([
         (B4,     S, N("C4")),
         (B4_E,   S, N("Eb4")),
@@ -458,21 +486,20 @@ def rh_f_dorian_pickup() -> List[Event]:
     ])
 
 
-def rh_chorus_ab(high_register: bool = False, include_downbeat_chord: bool = False) -> List[Event]:
-    """Chorus melody over the Ab measure (Bars 33, 37, 65, 69)."""
+def rh_chorus_ab(high_register: bool = False) -> List[Event]:
+    """Chorus melody over the Ab measure (Bars 33, 37, 65, 69), tying Beat 4& across the barline."""
     c_n  = "C6"  if high_register else "C5"
     bb_n = "Bb5" if high_register else "Bb4"
     eb_n = "Eb6" if high_register else "Eb5"
-    seq = [
+    downbeat_ab = N("Eb5", "Ab5", "C6") if high_register else CHORDS["Ab_low"]
+    return E_seq([
+        (B1,     Q,  downbeat_ab),
         (B2,     E,  Oct(c_n)),
         (B2_AND, E,  Oct(bb_n)),
         (B3,     DE, Oct(c_n)),
         (B3_A,   DE, Oct(eb_n)),
-        (B4_AND, Q,  Oct(c_n)),
-    ]
-    if include_downbeat_chord:
-        seq.insert(0, (B1, Q, CHORDS["Ab_low"]))
-    return E_seq(seq)
+        (B4_AND, DQ, Oct(c_n)),
+    ])
 
 
 def rh_chorus_bb(high_register: bool = False) -> List[Event]:
@@ -496,13 +523,13 @@ def rh_chorus_cm1(high_register: bool = False) -> List[Event]:
         return E_seq([
             (B1,     DE, CHORDS["Bb_sus"]),
             (B1_A,   DE, CHORDS["Cm"]),
-            (B2_AND, DQ, CHORDS["Cm"]),
+            (B2_AND, H,  CHORDS["Cm"]),
             (B4_AND, E,  SixthOct("Eb6")),
         ])
     return E_seq([
         (B1,     DE, SixthOct("F6")),
         (B1_A,   DE, SixthOct("G6")),
-        (B2_AND, DQ, SixthOct("G6")),
+        (B2_AND, H,  SixthOct("G6")),
         (B4_AND, E,  SixthOct("Eb6")),
     ])
 
@@ -512,20 +539,11 @@ def rh_chorus_cm2(climax_turn: bool = False, full_sixth_bb: bool = False) -> Lis
     Chorus 2nd Cm measure: Double-tresillo (3+3+2 in both halves of the bar)
     at steps (B1, B1_A, B2_AND) and (B3, B3_A, B4_AND) in SixthOct voicings.
     """
-    if not climax_turn:
-        return E_seq([
-            (B1,     DE, SixthOct("F6")),
-            (B1_A,   DE, SixthOct("G6")),
-            (B2_AND, E,  SixthOct("G6")),
-            (B3,     DE, SixthOct("G6")),
-            (B3_A,   DE, SixthOct("F6")),
-            (B4_AND, E,  SixthOct("Eb6")),
-        ])
-    bb_v = SixthOct("Bb6") if full_sixth_bb else Oct("Bb6")
+    mid_v = (SixthOct("Bb6") if full_sixth_bb else Oct("Bb6")) if climax_turn else SixthOct("G6")
     return E_seq([
         (B1,     DE, SixthOct("F6")),
         (B1_A,   DE, SixthOct("G6")),
-        (B2_AND, E,  bb_v),
+        (B2_AND, E,  mid_v),
         (B3,     DE, SixthOct("G6")),
         (B3_A,   DE, SixthOct("F6")),
         (B4_AND, E,  SixthOct("Eb6")),
@@ -559,26 +577,26 @@ def intro_section() -> List[Measure]:
         add(
             "Bb -> Eb/G -> Bb/D", "VII -> III6 -> VII6", 120, "mp",
             lh=E_seq([(B1, H, N("Bb2", "F3", "Bb3")), (B3, Q, N("Eb3", "Bb3")), (B4, Q, N("D3", "Bb3"))]),
-            rh=E_seq([(B1_AND, Q, N("F4")), (B2_AND, DQ, N("G4")), (B4, DE, N("Bb4")), (B4_A, S, N("F4"))]),
+            rh=rh_main_theme_answer("F4"),
             pedals=[B1, B4],
         )
         if phrase == 1:
             add(
                 "Cm9", "i9", 120, "p",
-                lh=[Roll(B1, W + DH, N("C3", "G3", "D4", "Eb4"))],
+                lh=[Roll(B1, W + W, N("C3", "G3", "D4", "Eb4"))],
                 rh=[Roll(B1, H + E, N("G4", "C5"))] + E_seq([(B3_AND, E, N("Bb4")), (B4, E, N("Bb4")), (B4_AND, E, N("C5"))]),
             )
             add(
                 "Cm -> G(half)", "i -> V", 116, "p",
                 lh=[],
-                rh=E_seq([(B1, H, N("Eb4")), (B3, Q, N("D4"))]) + rh_pickup_cascade(start_step=B4_AND),
+                rh=E_seq([(B1, H, N("Eb4")), (B3, DQ, N("D4"))]) + rh_pickup_cascade(start_step=B4_AND),
                 pedals=[],
             )
         else:
             add(
                 "Cm9", "i9", 118, "p",
-                lh=[Roll(B1, DH, N("C3", "G3", "D4", "Eb4"))],
-                rh=[Roll(B1, H + E, N("G4", "C5"))] + pentatonic_cascade("G5", "Eb4", start_step=B3_AND, rate=T),
+                lh=[Roll(B1, W, N("C3", "G3", "D4", "Eb4"))],
+                rh=[Roll(B1, DH, N("G4", "C5"))] + pentatonic_cascade("G5", "Eb4", start_step=B4, rate=T),
             )
             add(
                 "Cm (Fermata)", "i", 108, "p",
@@ -597,38 +615,36 @@ def verse_section(verse_num: int) -> List[Measure]:
 
     for subphrase in (1, 2):
         # Bar 1 of subphrase (Bar 9/13/17/21): Cm over C pedal
-        add(
-            "Cm", "i", 124, dyn,
-            lh=lh_verse_pedal("Cm"),
-            rh=E_seq([
-                (B1_AND, E, N("Eb4", "Eb5")), (B2, E, N("D4", "D5")), (B2_AND, E, N("C5")),
-                (B3, E, N("C4", "Eb4")), (B3_AND, E, N("C5")), (B4, E, N("Bb4")), (B4_AND, E, N("G4")),
-            ]),
-        )
+        # In subphrase 1 (Bar 9/17), Beat 1 strikes G4; in subphrase 2 (Bar 13/21), G4 is tied from Bar 12/20 Beat 4&!
+        rh_cm_open = ([(B1, E, N("G4"))] if subphrase == 1 else []) + [
+            (B1_AND, E, N("Eb4", "Eb5")), (B2, E, N("D4", "D5")), (B2_AND, E, N("C5")),
+            (B3, E, N("C4", "Eb4")), (B3_AND, E, N("C5")), (B4, E, N("Bb4")), (B4_AND, E, N("G4")),
+        ]
+        add("Cm", "i", 124, dyn, lh=lh_verse_pedal("Cm"), rh=E_seq(rh_cm_open))
         if subphrase == 1:
-            # Bar 10 / 18: Bb/C
+            # Bar 10 / 18: Bb/C (Beat 4& C4 ties across barline into Bar 11 / 19 Beat 1)
             add(
                 "Bb/C", "VII/1", 124, dyn,
                 lh=lh_verse_pedal("Bb/C"),
                 rh=E_seq([
                     (B1, E, N("D4")), (B1_AND, E, N("G4")), (B2, E, N("F4")), (B2_AND, E, N("Eb4")),
-                    (B3, DE, N("D4", "F4")), (B3_A, DE, N("G4")), (B4_AND, Q, N("C4")),
+                    (B3, DE, N("D4", "F4")), (B3_A, DE, N("G4")), (B4_AND, DQ, N("C4")),
                 ]),
             )
             # Bar 11 / 19: Ab/C
             add(
                 "Ab/C", "VI/1", 124, "p",
                 lh=lh_verse_pedal("Ab/C"),
-                rh=E_seq([(B2, Q, N("C4", "Eb4")), (B3, DQ, N("C4", "Eb4"))]),
+                rh=E_seq([(B2, Q, N("C4", "Eb4")), (B3, H, N("C4", "Eb4"))]),
             )
-            # Bar 12 / 20: Ab/C -> Bb (Verse 2 lifts step B3_A from Bb4 to D5)
+            # Bar 12 / 20: Ab/C -> Bb (Beat 4& G4 ties across barline into Bar 13 / 21 Beat 1)
             peak_note = "Bb4" if verse_num == 1 else "D5"
             add(
                 "Ab/C -> Bb", "VI/1 -> VII", 124, dyn,
                 lh=lh_verse_pedal("Bb_cadence"),
                 rh=E_seq([
                     (B1, E, N("C4")), (B1_AND, E, N("F4")), (B2, E, N("G4")), (B2_AND, E, N("Bb4")),
-                    (B3, DE, N("D4", "F4", "C5")), (B3_A, DE, N(peak_note)), (B4_AND, E, N("G4")),
+                    (B3, DE, N("D4", "F4", "C5")), (B3_A, DE, N(peak_note)), (B4_AND, Q, N("G4")),
                 ]),
             )
         else:
@@ -638,18 +654,19 @@ def verse_section(verse_num: int) -> List[Measure]:
                 lh=lh_verse_pedal("Bb/C"),
                 rh=E_seq([
                     (B1, E, N("D4")), (B1_AND, E, N("F4")), (B2, E, N("Eb4")), (B2_AND, E, N("F4")),
-                    (B3, DE, N("D4", "G4")), (B3_A, DE, N("Bb4")), (B4_AND, Q, N("C5")),
+                    (B3, DE, N("D4", "G4")), (B3_A, DE, N("Bb4")), (B4_AND, E, N("C5")),
                 ]),
             )
             # Bar 15 / 23: F/C (C Dorian IV major chord over C pedal)
-            rh_dorian = [Roll(B1, DH, N("C4", "F4", "A4"))]
             if verse_num == 1:
-                rh_dorian += E_seq([(B4_E, S, N("C5")), (B4_AND, S, N("C4", "G4")), (B4_A, S, N("F4"))])
+                rh_dorian = [Roll(B1, DH, N("C4", "F4", "A4"))] + E_seq([
+                    (B4, S, N("A4")), (B4_E, S, N("C5")), (B4_AND, S, N("C4", "G4")), (B4_A, S, N("F4")),
+                ])
             else:
-                rh_dorian += E_seq([(B4_AND, E, N("D4", "F4", "A4"))])
+                rh_dorian = [Roll(B1, DH + E, N("C4", "F4", "A4"))] + E_seq([(B4_AND, E, N("D4", "F4", "A4"))])
             add("F/C (Dorian IV)", "IV/1", 124, dyn, lh=lh_verse_pedal("F/C"), rh=rh_dorian)
 
-            # Bar 16 (Quiet turnaround) vs Bar 24 (Rising octave build-up into Pre-Chorus)
+            # Bar 16 (Quiet turnaround) vs Bar 24 (Rising octave build-up + syncopated Cm anticipation into Pre-Chorus)
             if verse_num == 1:
                 add(
                     "Cm -> Bb", "i -> VII", 122, "mp",
@@ -662,9 +679,10 @@ def verse_section(verse_num: int) -> List[Measure]:
                     lh=E_seq([(B1, DQ, N("C3")), (B2_AND, E, N("G2", "G3")), (B3, H, N("Bb2", "Bb3"))]),
                     rh=E_seq([
                         (B1, E, Oct("Eb5")), (B1_AND, E, Oct("Eb5")), (B2, E, Oct("Eb5")),
-                        (B2_AND, E, Oct("C5")), (B3, Q, Oct("Eb5")), (B4, Q, Oct("F5")),
+                        (B2_AND, E, Oct("C5")), (B3, Q, Oct("Eb5")), (B4, E, Oct("F5")),
+                        (B4_AND, E + DH, CHORDS["Cm"]),
                     ]),
-                    pedals=[B1, B3],
+                    pedals=[B1, B3, B4_AND],
                 )
     return bars
 
@@ -674,17 +692,17 @@ def prechorus_section() -> List[Measure]:
     bars: List[Measure] = []
     add = _make_adder("IV. Pre-Chorus", bars)
 
-    # Subphrase 1 (Bars 25-28): Eighth-note syncopated RH chord anticipations (-E)
-    add("Cm", "i", 128, "f", lh=lh_prechorus_groove("Cm"), rh=E_seq([(-E, DH, CHORDS["Cm"]), (B4, E, Oct("G5"))]), pedals=[-E, B1])
-    add("Bb/C", "VII/1", 128, "f", lh=lh_prechorus_groove("Bb/C"), rh=E_seq([(-E, DH, CHORDS["Bb_sus"]), (B3_AND, E, Oct("G5")), (B4, E, Oct("F5"))]), pedals=[-E, B1])
-    add("Ab/C", "VI/1", 128, "f", lh=lh_prechorus_groove("Ab/C"), rh=E_seq([(-E, DH, CHORDS["Ab"]), (B3_AND, E, Oct("D5")), (B4, E, Oct("Eb5"))]), pedals=[-E, B1])
-    add("Bb/C", "VII/1", 128, "f", lh=lh_prechorus_groove("Bb/C"), rh=E_seq([(-E, H + E, CHORDS["Bb_sus"]), (B3, Q, N("D4", "F4", "Bb4", "D5")), (B4, E, N("F4", "A4", "D5"))]), pedals=[-E, B1])
+    # Subphrase 1 (Bars 25-28): Beat 4& syncopated RH chord anticipations tied across barlines
+    add("Cm", "i", 128, "f", lh=lh_prechorus_groove("Cm"), rh=E_seq([(B4, E, Oct("G5")), (B4_AND, DH, CHORDS["Bb_sus"])]), pedals=[B1, B4_AND])
+    add("Bb/C", "VII/1", 128, "f", lh=lh_prechorus_groove("Bb/C"), rh=E_seq([(B3_AND, E, Oct("G5")), (B4, E, Oct("F5")), (B4_AND, DH, CHORDS["Ab"])]), pedals=[B1, B4_AND])
+    add("Ab/C", "VI/1", 128, "f", lh=lh_prechorus_groove("Ab/C"), rh=E_seq([(B3_AND, E, Oct("D5")), (B4, E, Oct("Eb5")), (B4_AND, H + E, CHORDS["Bb_sus"])]), pedals=[B1, B4_AND])
+    add("Bb/C", "VII/1", 128, "f", lh=lh_prechorus_groove("Bb/C"), rh=E_seq([(B3, Q, N("D4", "F4", "Bb4", "D5")), (B4, Q, N("F4", "A4", "D5"))]), pedals=[B1])
 
     # Subphrase 2 (Bars 29-32): On-beat climb -> F Dorian IV arpeggio sweep
     add("Cm -> Eb/G", "i -> III6", 128, "f", lh=lh_prechorus_groove("Cm"), rh=E_seq([(B1, DQ, CHORDS["Cm"]), (B2_AND, DQ, CHORDS["Eb_high"]), (B4, E, Oct("C6")), (B4_AND, E, N("Eb5"))]), pedals=[B1])
-    add("Bb/C", "VII/1", 128, "f", lh=lh_prechorus_groove("Bb/C"), rh=E_seq([(B1, H, CHORDS["Bb_sus"]), (B3_AND, E, Oct("G5")), (B4, Q, Oct("F5"))]))
-    add("Ab/C", "VI/1", 128, "f", lh=lh_prechorus_groove("Ab/C"), rh=E_seq([(B1, E, CHORDS["Ab"]), (B1_AND, E, Oct("D5")), (B2, E, Oct("Eb5")), (B2_AND, DQ, Oct("C5"))]))
-    add("F (Dorian IV)", "IV", 128, "f", lh=lh_f_dorian_sweep(), rh=E_seq([(B1, DH, CHORDS["F_dor"])]) + rh_f_dorian_pickup())
+    add("Bb/C", "VII/1", 128, "f", lh=lh_prechorus_groove("Bb/C"), rh=E_seq([(B1, H + E, CHORDS["Bb_sus"]), (B3_AND, E, Oct("G5")), (B4, Q, Oct("F5"))]))
+    add("Ab/C", "VI/1", 128, "f", lh=lh_prechorus_groove("Ab/C"), rh=E_seq([(B1, E, CHORDS["Ab"]), (B1_AND, E, Oct("D5")), (B2, E, Oct("Eb5")), (B2_AND, H + E, Oct("C5"))]))
+    add("F (Dorian IV)", "IV", 128, "f", lh=lh_f_dorian_sweep(), rh=E_seq([(B1, DH, CHORDS["F_dor"])]) + rh_f_dorian_pickup(high_register=False))
     return bars
 
 
@@ -693,10 +711,10 @@ def chorus_section(high_register: bool, section_name: str, bpm: int, dyn: str) -
     bars: List[Measure] = []
     add = _make_adder(section_name, bars)
     for half in (1, 2):
-        add("Ab", "VI", bpm, dyn, lh=lh_chorus_drive("Ab1"), rh=rh_chorus_ab(high_register=high_register, include_downbeat_chord=(half == 1)))
+        add("Ab", "VI", bpm, dyn, lh=lh_chorus_drive("Ab1"), rh=rh_chorus_ab(high_register=high_register))
         add("Bb", "VII", bpm, dyn, lh=lh_chorus_drive("Bb1"), rh=rh_chorus_bb(high_register=high_register))
         add("Bb/C -> Cm", "VII/1 -> i", bpm, dyn, lh=lh_chorus_drive("C2"), rh=rh_chorus_cm1(high_register=high_register), pedals=[B1])
-        add("Cm", "i", bpm, dyn, lh=lh_chorus_drive("C2", omit_last=(half == 2 and not high_register)), rh=rh_chorus_cm2(climax_turn=(half == 2), full_sixth_bb=high_register))
+        add("Cm", "i", bpm, dyn, lh=lh_chorus_drive("C2", omit_last=False), rh=rh_chorus_cm2(climax_turn=(half == 2), full_sixth_bb=high_register))
     return bars
 
 
@@ -706,32 +724,31 @@ def postchorus_section() -> List[Measure]:
     add = _make_adder("VI. Post-Chorus", bars)
     for phrase in (1, 2):
         if phrase == 1:
-            add("Abmaj7 -> Bb", "VI -> VII", 124, "mp", lh=E_seq([(B1, H, N("Ab3")), (B3, H, N("F3", "Bb3"))]), rh=E_seq([(B1, Q, N("Eb4")), (B3, Q, N("D4"))]) + rh_main_theme())
+            add("Abmaj7 -> Bb", "VI -> VII", 124, "mp", lh=E_seq([(B1, H, N("Ab2", "Eb3", "Ab3")), (B3, H, N("Bb2", "F3", "Bb3"))]), rh=rh_main_theme())
         else:
-            add("Fm7 -> Gm7", "iv7 -> v7", 124, "mp", lh=E_seq([(B1, H, N("F2", "C3")), (B3, H, N("G2", "D3", "G3"))]), rh=E_seq([(B1, E, N("C5"))]) + rh_main_theme())
-        add("Cm7 -> Eb", "i7 -> III", 124, "mp", lh=E_seq([(B1, H, N("C3", "G3", "Bb3")), (B3, H, N("Eb3"))]), rh=E_seq([(B1_AND, Q, N("F4")), (B2_AND, Q, N("G4")), (B3_AND, Q, N("Bb4")), (B4_A, S, N("Ab4"))]))
+            add("Fm7 -> Gm7", "iv7 -> v7", 124, "mp", lh=E_seq([(B1, H, N("F2", "C3", "F3")), (B3, H, N("G2", "D3", "G3"))]), rh=rh_main_theme())
+        add("Cm7 -> Eb", "i7 -> III", 124, "mp", lh=E_seq([(B1, H, N("C3", "G3", "Bb3")), (B3, H, N("Eb3", "Bb3"))]), rh=rh_main_theme_answer("Ab4"))
         add(
             "Ab -> Bb", "VI -> VII", 124, "mp",
             lh=E_seq([(B1, H, N("Ab2", "Eb3", "Ab3") if phrase == 2 else N("Ab2", "Eb3")), (B3, H, N("Bb2", "F3", "Bb3"))]),
             rh=E_seq([
                 (B1, E, N("C5", "F5")), (B1_AND, E, N("Eb5")), (B2, E, N("C5")), (B2_AND, E, N("G5")),
-                (B3, E, N("F5")), (B3_AND, E, N("Eb5")), (B4, E, N("Bb4")), (B4_AND, Q if phrase == 2 else DQ, N("C5")),
+                (B3, E, N("F5")), (B3_AND, E, N("Eb5")), (B4, E, N("Bb4")), (B4_AND, E + H if phrase == 2 else E + DQ, N("C5")),
             ]),
         )
         if phrase == 1:
             add(
                 "Cm", "i", 124, "mp",
                 lh=E_seq([(B1, W, N("C3", "G3"))]),
-                rh=E_seq([(B1, DQ, N("C4"))])
-                + pentatonic_cascade("Eb5", "G4", start_step=B2_AND, rate=T)
+                rh=pentatonic_cascade("Eb5", "G4", start_step=B2_AND, rate=T)
                 + E_seq([(B3, E, N("C4", "F4")), (B3_AND, E, N("Eb4", "G4")), (B4, E, N("F4", "Bb4")), (B4_AND, S, N("G4", "C5")), (B4_A, S, N("Ab4"))]),
             )
         else:
             add(
                 "Cm (Pentatonic Run)", "i", 124, "mf",
-                lh=E_seq([(B1, Q, N("C2", "C3"))]) + pentatonic_cascade("C3", "Bb3", start_step=B2, rate=T),
-                rh=pentatonic_cascade("C4", "Bb4", start_step=B3, rate=T)
-                + pentatonic_cascade("Eb6", "Eb5", start_step=B3_A, rate=T),
+                lh=E_seq([(B1, Q, N("C2", "C3"))]) + pentatonic_cascade("C3", "F4", start_step=B2, rate=T) + E_seq([(B3, H, N("C2", "G2", "C3"))]),
+                rh=pentatonic_cascade("G4", "C6", start_step=B3, rate=T)
+                + pentatonic_cascade("Eb6", "Bb4", start_step=B4, rate=T),
             )
     return bars
 
@@ -743,24 +760,24 @@ def operatic_interlude() -> List[Measure]:
 
     add("Ab", "VI", 128, "mf", lh=lh_lyrical_arch("Ab1"), rh=E_seq([(B1, Q, N("C5")), (B2, H, N("G4")), (B4, E, N("F4", "Bb4")), (B4_AND, E, N("Eb4"))]))
     add("Bb", "VII", 128, "mf", lh=lh_lyrical_arch("Bb1"), rh=E_seq([(B1, DQ, N("F4"))]) + pentatonic_cascade("Eb5", "G4", start_step=B2_AND, rate=T) + E_seq([(B3, Q, N("F4")), (B4, E, N("Eb4")), (B4_AND, E, N("C4"))]))
-    add("Cm -> Gm", "i -> v", 128, "mp", lh=E_seq([(B1, Q, N("C2", "C3")), (B2, E, N("G3")), (B2_AND, E, N("C2")), (B3, Q, N("G2", "C3")), (B4, Q, N("G2", "Bb3"))]), rh=E_seq([(B1, Q, N("Eb4")), (B2, H, N("C4")), (B4, Q, N("D4"))]), pedals=[B1])
-    add("Cm", "i", 128, "mp", lh=E_seq([(B1, H, N("C3")), (B3, H, N("C2", "C3"))]), rh=E_seq([(B1, H + E, N("C4", "Eb4"))]) + pentatonic_cascade("Eb6", "C5", start_step=B3_A, rate=T), pedals=[])
+    add("Cm -> Gm", "i -> v", 128, "mp", lh=E_seq([(B1, Q, N("C2", "C3")), (B2, E, N("G3")), (B2_AND, E, N("C2")), (B3, Q, N("G2", "C3")), (B4, Q, N("G2", "D3", "G3"))]), rh=E_seq([(B1, Q, N("Eb4")), (B2, H, N("C4")), (B4, Q, N("D4"))]), pedals=[B1])
+    add("Cm", "i", 128, "mp", lh=E_seq([(B1, H, N("C3")), (B3, H, N("C2", "C3"))]), rh=E_seq([(B1, DH, N("C4", "Eb4"))]) + pentatonic_cascade("Eb6", "Bb4", start_step=B4, rate=T), pedals=[])
     add("Fm", "iv", 128, "mf", lh=lh_lyrical_arch("F1"), rh=E_seq([(B1, H, N("G4", "Bb4")), (B3, Q, N("G4")), (B4, E, N("Bb4")), (B4_AND, E, N("F4"))]))
-    add("Gm", "v", 128, "mf", lh=lh_lyrical_arch("G1"), rh=pentatonic_cascade("Eb5", "G4", start_step=B2_AND, rate=T) + E_seq([(B3, E, N("F4")), (B3_AND, E, N("G4")), (B4, E, N("Bb4")), (B4_AND, E, N("C5"))]))
+    add("Gm", "v", 128, "mf", lh=lh_lyrical_arch("G1"), rh=E_seq([(B1, DQ, N("G4"))]) + pentatonic_cascade("Eb5", "G4", start_step=B2_AND, rate=T) + E_seq([(B3, E, N("F4")), (B3_AND, E, N("G4")), (B4, E, N("Bb4")), (B4_AND, E, N("C5"))]))
 
     # Bar 55: F (Dorian IV) 16th-note D5-C5 Trill + Ascending C-Dorian Scale Run
     trill_55 = [Event(s, S, N("D5" if s % 2 == 0 else "C5")) for s in range(B3_AND)]
-    run_55 = E_seq([(B3_AND, S, N("D5")), (B3_A, S, N("Eb5")), (B4, S, N("F5")), (B4_E, S, N("G5")), (B4_AND, S, N("C4", "A5")), (B4_A, S, N("Bb5"))])
+    run_55 = E_seq([(B3_AND, S, N("D5")), (B3_A, S, N("Eb5")), (B4, S, N("F5")), (B4_E, S, N("G5")), (B4_AND, S, N("A5")), (B4_A, S, N("Bb5"))])
     add(
         "F (Dorian Trill I)", "IV", 136, "mf",
         lh=E_seq([(B1, E, N("F1", "F2")), (B1_AND, E, N("C2")), (B2, E, N("F2")), (B2_AND, E, N("A2", "C3")), (B3, E, N("F2")), (B3_AND, E, N("A2", "C3")), (B4, E, N("F3")), (B4_AND, E, N("A3"))]),
         rh=trill_55 + run_55,
     )
     # Bar 56: F (Dorian IV) High 16th-note C6-D6 Trill
-    trill_56 = [Event(s, S, N("F4", "C6") if s == B1 else (N("C4", "D6") if s == B1_E else N("C6" if s % 2 == 0 else "D6"))) for s in range(W)]
+    trill_56 = [Event(s, S, N("C6" if s % 2 == 0 else "D6")) for s in range(W)]
     add(
         "F (Dorian Trill II)", "IV", 138, "f",
-        lh=E_seq([(B1_AND, E, N("A3")), (B2, E, N("F3")), (B2_AND, E, N("C3")), (B3, E, N("A2")), (B3_AND, E, N("F3")), (B4, E, N("C3")), (B4_AND, E, N("A2", "F2"))]),
+        lh=E_seq([(B1, E, N("F1", "F2")), (B1_AND, E, N("A3")), (B2, E, N("F3")), (B2_AND, E, N("C3")), (B3, E, N("A2")), (B3_AND, E, N("F3")), (B4, E, N("C3")), (B4_AND, E, N("A2", "F2"))]),
         rh=trill_56,
         pedals=[],
     )
@@ -786,12 +803,12 @@ def breakthrough_ostinato_section() -> List[Measure]:
             # Bar 59: Ab/C -> Cm ostinato
             add("Ab/C -> Cm", "VI/1 -> i", 132, "f", lh=lh_breakthrough_ostinato("Ab/C", driving_pulse=True), rh=E_seq([(s, E, N("C4", "Eb4", "G4", "Ab4") if s < B2_AND else N("C4", "Eb4", "G4")) for s in EIGHTH_STEPS]), pedals=[B1])
             # Bar 60: Heroic Cm Melodic Call
-            add("Cm", "i", 132, "ff", lh=lh_breakthrough_ostinato("Cm", driving_pulse=False), rh=E_seq([(B1, E, N("C4", "F4")), (B1_AND, E, N("F4")), (B2, E, N("G4")), (B2_AND, E, N("G4", "Bb4")), (B3, DE, N("G4", "C5")), (B3_A, DE, N("G4", "Bb4")), (B4_AND, E, N("G4"))]))
+            add("Cm", "i", 132, "ff", lh=lh_breakthrough_ostinato("Cm", driving_pulse=True), rh=E_seq([(B1, E, N("C4", "F4")), (B1_AND, E, N("F4")), (B2, E, N("G4")), (B2_AND, E, N("G4", "Bb4")), (B3, DE, N("G4", "C5")), (B3_A, DE, N("G4", "Bb4")), (B4_AND, E, N("G4"))]))
         else:
             # Bar 63: Ab/C -> Cm Rising Call
-            add("Ab/C -> Cm", "VI/1 -> i", 132, "ff", lh=lh_breakthrough_ostinato("Ab/C", driving_pulse=False), rh=E_seq([(B1, E, N("C4", "Ab4")), (B1_AND, E, N("C4", "G4")), (B2, E, N("C4", "F4")), (B2_AND, E, N("F4")), (B3, DE, N("F4", "G4")), (B3_A, DE, N("F4", "G4", "Bb4")), (B4_AND, E, N("G4"))]), pedals=[B1])
+            add("Ab/C -> Cm", "VI/1 -> i", 132, "ff", lh=lh_breakthrough_ostinato("Ab/C", driving_pulse=True), rh=E_seq([(B1, E, N("C4", "Ab4")), (B1_AND, E, N("C4", "G4")), (B2, E, N("C4", "F4")), (B2_AND, E, N("F4")), (B3, DE, N("F4", "G4")), (B3_A, DE, N("F4", "G4", "Bb4")), (B4_AND, E, N("G4"))]), pedals=[B1])
             # Bar 64: F (Dorian IV) + 16th-note ascending sweep into Chorus 2
-            add("F (Dorian IV)", "IV", 132, "ff", lh=lh_f_dorian_sweep(), rh=E_seq([(B1, DH, N("F4", "A4", "C5", "F5"))]) + rh_f_dorian_pickup())
+            add("F (Dorian IV)", "IV", 132, "ff", lh=lh_f_dorian_sweep(), rh=E_seq([(B1, DH, N("F4", "A4", "C5", "F5"))]) + rh_f_dorian_pickup(high_register=True))
     return bars
 
 
@@ -801,21 +818,20 @@ def chorus_extension() -> List[Measure]:
     add = _make_adder("VIIIb. Chorus Ext", bars)
 
     for phrase in (1, 2):
-        # Bar 73 / 77: Ab with High-Octave Main Theme
-        add("Ab", "VI", 132, "ff", lh=lh_chorus_drive("Ab1", omit_last=True), rh=rh_main_theme(high_octaves=True))
+        # Bar 73 / 77: Ab with High-Octave Main Theme (Beat 4& Bb5 ties into Bar 74 / 78 Beat 1)
+        add("Ab", "VI", 132, "ff", lh=lh_chorus_drive("Ab1", omit_last=False), rh=rh_main_theme(high_octaves=True))
         # Bar 74 / 78: Bb
-        b4_step = B3_AND if phrase == 1 else B4
-        add("Bb", "VII", 132, "ff", lh=lh_chorus_drive("Bb1"), rh=E_seq([(B1_AND, Q, Oct("F5")), (B2_AND, Q, Oct("G5")), (b4_step, Q, Oct("Bb5"))]))
+        add("Bb", "VII", 132, "ff", lh=lh_chorus_drive("Bb1"), rh=E_seq([(B1_AND, Q, Oct("F5")), (B2_AND, Q, Oct("G5")), (B3_AND, DQ, Oct("Bb5"))]))
         if phrase == 1:
             # Bar 75: Cm with High-Octave Main Theme variant
-            add("Cm", "i", 132, "ff", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, E, Oct("F6")), (B1_AND, E, Oct("Eb6")), (B2, E, Oct("C6")), (B2_AND, E, Oct("G6")), (B3, E, Oct("F6")), (B3_AND, E, Oct("Eb6")), (B4, E, Oct("Bb5")), (B4_AND, Q, Oct("C6"))]))
-            # Bar 76: Cm
-            add("Cm", "i", 132, "f", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, DQ, N("C4", "F5")), (B2_AND, DQ, N("C4", "G4", "G5")), (B4, Q, N("Eb5"))]))
+            add("Cm", "i", 132, "ff", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, E, Oct("F6")), (B1_AND, E, Oct("Eb6")), (B2, E, Oct("C6")), (B2_AND, E, Oct("G6")), (B3, E, Oct("F6")), (B3_AND, E, Oct("Eb6")), (B4, E, Oct("Bb5")), (B4_AND, E, Oct("C6"))]))
+            # Bar 76: Cm (playable 1-octave sixth+octave voicings)
+            add("Cm", "i", 132, "f", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, DQ, SixthOct("F5")), (B2_AND, DQ, SixthOct("G5")), (B4, Q, Oct("Eb5"))]))
         else:
             # Bar 79: Cm Fourths Motif ([C6,F6] -> [Bb5,Eb6] -> [G5,C6])
             add("Cm", "i", 132, "f", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, E, FourthOct("F6")), (B1_AND, E, FourthOct("Eb6")), (B2, H, FourthOct("C6")), (B4, E, FourthOct("F6")), (B4_AND, E, FourthOct("Eb6"))]))
-            # Bar 80: Cm Fourths Resolution
-            add("Cm", "i", 132, "f", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, W, N("C4", "Eb4", "G4", "G5", "C6"))]))
+            # Bar 80: Cm Fourths Resolution (playable 1-octave Cm chord)
+            add("Cm", "i", 132, "f", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, W, N("C5", "Eb5", "G5", "C6"))]))
     return bars
 
 
@@ -826,13 +842,16 @@ def operatic_climax() -> List[Measure]:
 
     # Phrase 1 (Bars 81-88): Rising Octave/Sixth Operatic Call
     for sub in (1, 2):
-        add("Ab", "VI", 130, "ff", lh=lh_climax_arpeggio("Ab1", tresillo_punch=False), rh=E_seq([(B2, Q, Oct("C5")), (B3, Q, Oct("D5")), (B4, Q, Oct("Eb5"))]))
+        add("Ab", "VI", 130, "ff", lh=lh_climax_arpeggio("Ab1", tresillo_punch=False), rh=E_seq([(B1, Q, CHORDS["Ab_low"]), (B2, Q, Oct("C5")), (B3, Q, Oct("D5")), (B4, Q, Oct("Eb5"))]))
         add(
             "Bb", "VII", 130, "ff",
             lh=lh_climax_arpeggio("Bb1", tresillo_punch=True),
-            rh=E_seq([(B1, DQ, SixthOct("F5")), (B2_AND, DQ if sub == 2 else H + E, Oct("Eb5"))] + ([(B4, Q, SixthOct("G5"))] if sub == 2 else [])),
+            rh=E_seq([(B1, DQ, SixthOct("F5")), (B2_AND, DQ if sub == 2 else H + E + Q, Oct("Eb5"))] + ([(B4, Q, SixthOct("G5"))] if sub == 2 else [])),
         )
-        add("Cm", "i", 130, "ff", lh=lh_climax_arpeggio("C2", tresillo_punch=False), rh=E_seq([(B2, E, N("C4", "G4", "C5")), (B2_AND, E, N("C4", "G4", "C5")), (B3, Q, Oct("D5")), (B4, Q, Oct("Eb5"))]))
+        rh_cm_call = ([(B1, Q, N("C4", "Eb4", "G4", "C5"))] if sub == 2 else []) + [
+            (B2, E, N("C4", "G4", "C5")), (B2_AND, E, N("C4", "G4", "C5")), (B3, Q, Oct("D5")), (B4, Q, Oct("Eb5")),
+        ]
+        add("Cm", "i", 130, "ff", lh=lh_climax_arpeggio("C2", tresillo_punch=False), rh=E_seq(rh_cm_call))
         add("Cm", "i", 130, "ff", lh=lh_climax_arpeggio("C2", tresillo_punch=(sub == 1)), rh=E_seq([(B1, DQ, SixthOct("F5")), (B2_AND, DQ, SixthOct("G5")), (B4, Q, SixthOct("Eb5" if sub == 1 else "G5"))]))
 
     # Phrase 2 (Bars 89-96): 7th-Octave Soaring Peak
@@ -841,29 +860,36 @@ def operatic_climax() -> List[Measure]:
         add("Bb", "VII", 132, "ff", lh=lh_climax_arpeggio("Bb1", tresillo_punch=True, high_span=True), rh=E_seq([(B1, DQ, Oct("G6")), (B2_AND, E, Oct("C7" if sub == 1 else "Bb6")), (B3, H, Oct("Bb6" if sub == 1 else "F6"))]))
         if sub == 1:
             add("Cm", "i", 132, "ff", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, DQ, SixthOct("G6")), (B2_AND, E, Oct("Bb6")), (B3, Q, Oct("G6")), (B4, Q, Oct("F6"))]))
-            add("Cm", "i", 132, "ff", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, H, SixthOct("Eb6")), (B3, H, N("Eb4", "G4", "C5", "Eb5", "G5", "C6"))]))
+            add("Cm", "i", 132, "ff", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, H, SixthOct("Eb6")), (B3, H, N("C5", "Eb5", "G5", "C6"))]))
         else:
             add("Eb", "III", 132, "ff", lh=lh_climax_arpeggio("Eb2", tresillo_punch=False), rh=E_seq([(B1, H, N("Eb6", "Bb6", "Eb7")), (B3, E, Oct("Bb6")), (B3_AND, S, Oct("C7")), (B3_A, S, Oct("Bb6")), (B4, E, Oct("G6")), (B4_AND, E, Oct("F6"))]))
-            add("Gm (Dominant v)", "v", 132, "ff", lh=lh_climax_wave("G1"), rh=E_seq([(B1, W, N("G4", "G5", "D6", "G6"))]))
+            add("Gm (Dominant v)", "v", 132, "ff", lh=lh_climax_wave("G1"), rh=E_seq([(B1, W, N("G5", "Bb5", "D6", "G6"))]))
 
     # Phrase 3 (Bars 97-106): Final Climax Descent & Resolution
-    add("Ab", "VI", 132, "ff", lh=lh_climax_arpeggio("Ab1", high_span=True), rh=E_seq([(B1, DE, Oct("C7")), (B1_A, S, Oct("Bb6")), (B2, Q, Oct("C7")), (B3, H, N("Eb5", "Eb6", "Eb7"))]))
+    add("Ab", "VI", 132, "ff", lh=lh_climax_arpeggio("Ab1", high_span=True), rh=E_seq([(B1, DE, Oct("C7")), (B1_A, S, Oct("Bb6")), (B2, Q, Oct("C7")), (B3, H, N("Eb6", "Bb6", "Eb7"))]))
     add("Bb", "VII", 132, "ff", lh=lh_climax_arpeggio("Bb1", tresillo_punch=True, high_span=True), rh=E_seq([(B1, DQ, Oct("G6")), (B2_AND, E, Oct("C7")), (B3, H, Oct("Bb6"))]))
     add("Cm", "i", 132, "ff", lh=lh_chorus_drive("C2"), rh=E_seq([(B1, DQ, Oct("G6")), (B2_AND, E, Oct("Eb7")), (B3, Q, Oct("C7")), (B4, Q, Oct("Bb6"))]))
     add("Ab -> Gm", "VI -> v", 132, "ff", lh=lh_climax_wave("Ab1", beat4_bass=N("G1", "G2")), rh=E_seq([(B1, DH, Oct("C7")), (B4, E, Oct("G6")), (B4_AND, S, Oct("Bb6")), (B4_A, S, Oct("G6"))]), pedals=[B1, B4])
 
-    # Bars 101-102: 2-Bar Fm Dramatic Arpeggio Sweep
-    add("Fm", "iv", 132, "ff", lh=lh_climax_wave("F1", beat4_bass=N("F3", "Ab3", "F4")), rh=E_seq([(B1, W + H, N("F4", "F5", "F6"))]))
+    # Bars 101-102: 2-Bar Fm Dramatic Arpeggio Sweep (1-octave RH chord tied into Bar 102)
+    add("Fm", "iv", 132, "ff", lh=lh_climax_wave("F1"), rh=E_seq([(B1, W + H, N("F5", "Ab5", "C6", "F6"))]))
     add(
         "Fm", "iv", 132, "ff",
-        lh=E_seq([(B1, E, N("F4")), (B1_AND, E, N("F3", "Ab3")), (B2, E, N("F3")), (B2_AND, E, N("C3")), (B3, E, N("F3")), (B3_AND, E, N("C3")), (B4, Q, N("F2", "F3"))]),
-        rh=E_seq([(B3, Q, N("F4", "Eb5", "Eb6")), (B4, Q, N("F4", "F5", "F6"))]),
+        lh=E_seq([(B1, E, N("F3", "Ab3", "C4")), (B1_AND, E, N("F3", "Ab3")), (B2, E, N("F3")), (B2_AND, E, N("C3")), (B3, E, N("F3")), (B3_AND, E, N("C3")), (B4, Q, N("F2", "F3"))]),
+        rh=E_seq([(B3, Q, Oct("Eb6")), (B4, Q, Oct("F6"))]),
         pedals=[],
     )
     add("Ab", "VI", 132, "ff", lh=lh_climax_wave("Ab1"), rh=E_seq([(B1, DH, Oct("G6")), (B4, Q, Oct("Bb6"))]))
     add("Bb", "VII", 132, "ff", lh=lh_climax_arpeggio("Bb1", tresillo_punch=True, high_span=True), rh=E_seq([(B1, DE, Oct("F6")), (B1_A, S, Oct("Eb6")), (B2, Q, Oct("F6")), (B3, Q, Oct("G6")), (B4, Q, Oct("Bb6"))]))
-    add("Cm", "i", 130, "ff", lh=E_seq([(B1, W + H, N("C2", "C3"))]), rh=E_seq([(B1, DQ, SixthOct("Eb7")), (B2_AND, W, N("C4", "G4", "C6", "G6", "C7"))]))
-    add("Cm (Waterfall)", "i", 128, "mf", lh=E_seq([(B1, H, N("C3"))]), rh=E_seq([(B1, H, N("Eb4", "G4", "Eb5"))]) + pentatonic_cascade("Eb6", "Eb4", start_step=B3, rate=T), pedals=[])
+    add("Cm", "i", 130, "ff", lh=E_seq([(B1, W + W, N("C2", "C3"))]), rh=E_seq([(B1, DQ, SixthOct("Eb7")), (B2_AND, H + E, N("C6", "Eb6", "G6", "C7"))]))
+    add(
+        "Cm (Waterfall)", "i", 128, "mf",
+        lh=[],
+        rh=E_seq([(B1, H, N("Eb5", "G5", "C6", "Eb6"))])
+        + pentatonic_cascade("F6", "C5", start_step=B3, rate=T)
+        + pentatonic_cascade("Eb6", "Bb4", start_step=B4, rate=T),
+        pedals=[],
+    )
     return bars
 
 
@@ -872,18 +898,18 @@ def quiet_outro() -> List[Measure]:
     bars: List[Measure] = []
     add = _make_adder("IX. Outro", bars)
 
-    add("Ab/C", "VI/1", 125, "p", lh=E_seq([(B1, H, N("C2", "C3")), (B4, W, N("C3"))]), rh=[Roll(B1, H, N("C4", "Eb4", "Ab4")), Roll(B3, H, N("C4", "Eb4", "Ab4"))])
-    add("Bb/C", "VII/1", 125, "p", lh=E_seq([(B1, DH, N("C3"))]), rh=[Roll(B1, H, N("F4", "Ab4", "Bb4"))] + E_seq([(B3, DQ, N("F4"))]) + rh_pickup_cascade(start_step=B4_AND))
+    add("Ab/C", "VI/1", 125, "p", lh=E_seq([(B1, DH, N("C2", "C3")), (B4, Q, N("C3"))]), rh=[Roll(B1, H, N("C4", "Eb4", "Ab4")), Roll(B3, H, N("C4", "Eb4", "Ab4"))])
+    add("Bb/C", "VII/1", 125, "p", lh=E_seq([(B1, W, N("C2", "C3"))]), rh=[Roll(B1, H, N("F4", "Ab4", "Bb4"))] + E_seq([(B3, DQ, N("F4"))]) + rh_pickup_cascade(start_step=B4_AND))
 
     for outro_phrase in (1, 2):
         tempo = 122 if outro_phrase == 1 else 118
         add("Fm7", "iv7", tempo, "p", lh=E_seq([(B1, W, N("F2", "C3", "F3"))]), rh=rh_main_theme())
-        add("Gm7", "v7", tempo, "p", lh=E_seq([(B1, W, N("G2", "D3"))]), rh=E_seq([(B1_AND, Q, N("F4")), (B2_AND, DQ, N("G4")), (B4, DE, N("Bb4")), (B4_A, S, N("F4"))]))
+        add("Gm7", "v7", tempo, "p", lh=E_seq([(B1, W, N("G2", "D3"))]), rh=rh_main_theme_answer("F4"))
         if outro_phrase == 1:
-            add("Cm9", "i9", 118, "p", lh=[Roll(B1, W + DH, N("C3", "G3", "D4", "Eb4"))], rh=[Roll(B1, DH, N("G4", "C5"))] + E_seq([(B4, E, N("Bb4")), (B4_AND, E, N("C5"))]))
-            add("Cm -> G(half)", "i -> V", 122, "p", lh=[], rh=E_seq([(B1, H, N("Eb4")), (B3, Q, N("D4"))]) + rh_pickup_cascade(start_step=B4_AND), pedals=[])
+            add("Cm9", "i9", 118, "p", lh=[Roll(B1, W + W, N("C3", "G3", "D4", "Eb4"))], rh=[Roll(B1, DH, N("G4", "C5"))] + E_seq([(B4, E, N("Bb4")), (B4_AND, E, N("C5"))]))
+            add("Cm -> G(half)", "i -> V", 122, "p", lh=[], rh=E_seq([(B1, H, N("Eb4")), (B3, DQ, N("D4"))]) + rh_pickup_cascade(start_step=B4_AND), pedals=[])
         else:
-            add("Cm9", "i9", 104, "pp", lh=[Roll(B1, DH, N("C3", "G3", "Eb4", "F4"))], rh=[Roll(B1, H, N("C5"))] + pentatonic_cascade("Eb6", "Eb4", start_step=B3, rate=T))
+            add("Cm9", "i9", 104, "pp", lh=[Roll(B1, W, N("C3", "G3", "Eb4", "F4"))], rh=[Roll(B1, DH, N("G4", "C5"))] + pentatonic_cascade("G5", "Eb4", start_step=B4, rate=T))
             add("Cm (Final Tonic)", "i", 80, "pp", lh=E_seq([(B1, W, N("C2", "G2", "C3"))]), rh=[Roll(B1, W, N("G3", "C4", "Eb4"))])
     return bars
 
@@ -917,18 +943,25 @@ PHRASE_CADENCE_BARS = frozenset({4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 96, 1
 
 
 def validate_score(measures: List[Measure]) -> None:
-    """Strictly verify all structural and musical invariants (zero fallbacks)."""
+    """Strictly verify all structural, rhythmic, and pianistic invariants (zero fallbacks)."""
     assert len(measures) == 116, f"Expected exactly 116 measures, got {len(measures)}"
     for idx, m in enumerate(measures):
         assert m.bar_num == idx + 1, f"Non-sequential bar number at index {idx}: {m.bar_num}"
         assert 60 <= m.bpm <= 200, f"Out-of-range BPM in bar {m.bar_num}: {m.bpm}"
         assert m.dynamic in DYNAMICS, f"Invalid dynamic in bar {m.bar_num}: {m.dynamic}"
         assert len(m.lh) + len(m.rh) > 0, f"Empty measure at bar {m.bar_num}"
+        min_allowed_step = -E if m.bar_num == 1 else B1
         for hand_events in (m.lh, m.rh):
             for ev in hand_events:
-                assert -E <= ev.step < W, f"Invalid step {ev.step} in bar {m.bar_num}"
+                assert min_allowed_step <= ev.step < W, f"Invalid step {ev.step} in bar {m.bar_num}"
                 assert ev.duration > 0, f"Non-positive duration {ev.duration} in bar {m.bar_num}"
+                assert abs(ev.step * 2 - round(ev.step * 2)) < 1e-9, f"Non-rational 32nd-note step {ev.step} in bar {m.bar_num}"
+                assert abs(ev.duration * 2 - round(ev.duration * 2)) < 1e-9, f"Non-rational 32nd-note duration {ev.duration} in bar {m.bar_num}"
                 assert len(ev.pitches) > 0, f"Empty pitch list in bar {m.bar_num}"
+                if not ev.rolled:
+                    assert max(ev.pitches) - min(ev.pitches) <= 12, (
+                        f"Unrolled chord span > 1 octave in bar {m.bar_num}: {ev.pitches}"
+                    )
                 for p in ev.pitches:
                     assert 21 <= p <= 108, f"Pitch {p} outside 88-key piano range in bar {m.bar_num}"
 
@@ -968,7 +1001,8 @@ def compile_to_midi(measures: List[Measure], out_path: str) -> pretty_midi.Prett
         on cadence measures.
       - Voices chords with natural bottom-to-top micro-spread (4.5 ms on block
         chords/octaves, 20 ms on lyrical Roll chords).
-      - Applies syncopated legato sustain pedaling (CC64).
+      - Applies legatissimo finger-overlap on 32nd-note ornamental cascades (`T`)
+        and syncopated legato sustain pedaling (CC64).
     """
     validate_score(measures)
     pm = pretty_midi.PrettyMIDI(initial_tempo=measures[0].bpm)
@@ -991,7 +1025,8 @@ def compile_to_midi(measures: List[Measure], out_path: str) -> pretty_midi.Prett
         for hand_label, ev_list in (("lh", m.lh), ("rh", m.rh)):
             for ev in ev_list:
                 t_on_base = max(0.0, t_cursor + ev.step * step_dur)
-                t_off = t_on_base + (ev.duration * 0.98) * step_dur
+                gate = 1.45 if ev.duration == T else 0.98
+                t_off = t_on_base + (ev.duration * gate) * step_dur
                 n_p = len(ev.pitches)
                 spread_sec = 0.020 if ev.rolled else (0.0045 if n_p > 1 else 0.0)
                 for idx, p in enumerate(sorted(ev.pitches)):
@@ -1279,8 +1314,8 @@ def synthesize_and_master_audio(midi_path: str, out_mp3_path: str) -> None:
 # 8. HUMAN-READABLE MARKDOWN SCORE EXPORTER
 # =============================================================================
 
-def format_events(events: List[Event]) -> str:
-    """Format a measure's symbolic events cleanly for human reading."""
+def format_events(events: List[Event], tie_at_end: bool = False) -> str:
+    """Format a measure's symbolic events cleanly for human reading, including cross-barline ties."""
     by_step = {}
     for ev in sorted(events, key=lambda x: x.step):
         s_lbl = f"{int(ev.step)}" if ev.step == int(ev.step) else f"{ev.step:.1f}"
@@ -1291,11 +1326,15 @@ def format_events(events: List[Event]) -> str:
             by_step[s_lbl] += f"+{names}"
         else:
             by_step[s_lbl] = names
-    return "  ".join(f"`{k}`:{v}" for k, v in by_step.items()) if by_step else "*(tacet)*"
+    if not by_step:
+        return "*(tacet)*"
+    out = "  ".join(f"`{k}`:{v}" for k, v in by_step.items())
+    return f"{out} `~`" if tie_at_end else out
 
 
 def export_markdown_score(measures: List[Measure], out_md: str) -> None:
     """Export the complete first-principles bar-by-bar chord & voicing score."""
+    rh_bars, lh_bars, tie_rh_end, tie_lh_end = _split_cross_barline_ties(measures)
     lines = [
         "# First-Principles Mathematical & Musical Reduction: *Extraordinary (不凡)*",
         "",
@@ -1304,7 +1343,7 @@ def export_markdown_score(measures: List[Measure], out_md: str) -> None:
         "- **Rendered Audio**: [`extraordinary.mp3`](extraordinary.mp3) | **MIDI**: [`extraordinary.mid`](extraordinary.mid) | **Sheet Music**: [`extraordinary_sheet_music.png`](extraordinary_sheet_music.png)",
         "- **Created With**: **Gemini 4 Argon high in Antigravity CLI**",
         "- **Key**: **C Natural Minor** (`C, D, Eb, F, G, Ab, Bb`) with **C Dorian** (`A` natural on the `F` major IV chord) & **G Dominant** (`Gm/G5` at the climax)",
-        "- **Meter**: **4/4** on a pure rational 16th-note grid (`0` = Beat 1, `4` = Beat 2, `8` = Beat 3, `12` = Beat 4; `~` denotes an upward rolled chord)",
+        "- **Meter**: **4/4** on a pure rational 16th-note grid (`0` = Beat 1, `4` = Beat 2, `8` = Beat 3, `12` = Beat 4; `~Pitch` denotes an upward rolled chord; trailing `~` denotes a tie across the barline)",
         "",
         "## 1. First-Principles Architecture (\"PNG to SVG\")",
         "",
@@ -1313,7 +1352,7 @@ def export_markdown_score(measures: List[Measure], out_md: str) -> None:
         "| **Tonal Basis** | C Minor + Dorian $\\natural\\hat{6}$ + Pentatonic $\\{C, E\\flat, F, G, B\\flat\\}$ | Modal Gufeng (古風) harmonic & ornamental space |",
         "| **Rhythmic Algebra** | Pure rational subdivisions (`W=16, H=8, Q=4, DE=3, E=2, S=1, T=0.5`) | Zero hard-coded timestamps; exact metric & tresillo (`3+3+2`) geometry |",
         "| **Left-Hand Functors** | `lh_verse_pedal`, `lh_prechorus_groove`, `lh_chorus_drive`, `lh_f_dorian_sweep`, `lh_breakthrough_ostinato`, `lh_climax_arpeggio`, `lh_lyrical_arch`, `lh_climax_wave` | 8 accompaniment archetypes spanning all 116 measures |",
-        "| **Right-Hand Operators** | `N`, `Oct`, `SixthOct`, `FourthOct`, `Roll`, `pentatonic_cascade` | Idiomatic solo-piano voicings & pentatonic waterfalls |",
+        "| **Right-Hand Operators** | `N`, `Oct`, `SixthOct`, `FourthOct`, `Roll`, `pentatonic_cascade` | Idiomatic `<= 1-octave` solo-piano voicings & pentatonic waterfalls |",
         "| **Virtual Pianist & 96 kHz Mastering** | Phrase-arch agogic breathing + Dual 96 kHz SoundFont synthesis + 24-mode sympathetic string bank + Concert-Hall FFT IR convolution | Studio-grade concert grand piano rendering (`extraordinary.mp3`) |",
         "",
         "## 2. Complete Bar-by-Bar Symbolic Score (Measures 1–116)",
@@ -1321,7 +1360,7 @@ def export_markdown_score(measures: List[Measure], out_md: str) -> None:
     ]
 
     cur_sec = None
-    for m in measures:
+    for idx, m in enumerate(measures):
         if m.section != cur_sec:
             cur_sec = m.section
             lines.extend([
@@ -1330,8 +1369,8 @@ def export_markdown_score(measures: List[Measure], out_md: str) -> None:
                 "| Bar | Tempo | Dyn | Chord | Roman | Left Hand (`step`:voicing) | Right Hand (`step`:voicing) |",
                 "| :---: | :---: | :---: | :---: | :---: | :--- | :--- |",
             ])
-        lh_str = format_events(m.lh)
-        rh_str = format_events(m.rh)
+        lh_str = format_events(lh_bars[idx], tie_lh_end[idx])
+        rh_str = format_events(rh_bars[idx], tie_rh_end[idx])
         lines.append(
             f"| **{m.bar_num}** | `{m.bpm:3d}` | *{m.dynamic}* | **{m.chord_symbol}** | `{m.roman}` | {lh_str} | {rh_str} |"
         )
@@ -1396,39 +1435,76 @@ def _ticks_to_ly_chunks(dur_ticks: int) -> List[str]:
     return chunks
 
 
-def _prepare_engraving_measures(
-    measures: List[Measure],
-) -> Tuple[List[List[Event]], List[List[Event]], List[bool]]:
+def _span_to_ly_chunks(start_tick: int, end_tick: int) -> List[str]:
     """
-    Prepare per-measure RH and LH event lists on the [0, 16) measure grid,
-    converting Pre-Chorus (-E) syncopated chord anticipations into idiomatic
-    Beat 4& eighth-note chords tied (`~`) across the barline.
+    Position-aware 4/4 rhythmic notation decomposer on the 32-tick measure grid:
+      1. Enforces the 4/4 Half-Bar Visibility Rule (Beat 3 = tick 16): no offbeat
+        or syncopated note crosses tick 16 without splitting into tied notes at
+        tick 16 (except whole notes 0..32 and Beat-1 dotted halves 0..24).
+      2. Preserves idiomatic intra-half-bar syncopations (`8 4 8` at ticks 4..12
+        and tresillo `8. 8. 8` at ticks 6..12), while splitting any other note
+        that crosses a quarter-note beat boundary (`tick 8` or `tick 24`).
+    """
+    assert 0 <= start_tick < end_tick <= 32, f"Invalid tick span: {start_tick}..{end_tick}"
+    if start_tick == 0 and end_tick == 32:
+        return ["1"]
+    if start_tick == 0 and end_tick == 24:
+        return ["2."]
+    if start_tick < 16 < end_tick:
+        return _span_to_ly_chunks(start_tick, 16) + _span_to_ly_chunks(16, end_tick)
+
+    half_base = 0 if start_tick < 16 else 16
+    rs = start_tick - half_base
+    re = end_tick - half_base
+    if rs == 0 and re == 16:
+        return ["2"]
+    if rs == 0 and re == 12:
+        return ["4."]
+    if rs == 4 and re == 12:
+        return ["4"]
+    if rs == 6 and re == 12:
+        return ["8."]
+    if rs < 8 < re:
+        mid = half_base + 8
+        return _span_to_ly_chunks(start_tick, mid) + _span_to_ly_chunks(mid, end_tick)
+    return _ticks_to_ly_chunks(end_tick - start_tick)
+
+
+def _split_cross_barline_ties(
+    measures: List[Measure],
+) -> Tuple[List[List[Event]], List[List[Event]], List[bool], List[bool]]:
+    """
+    Partition cross-barline overhang events (`ev.step + ev.duration > W`) at
+    measure boundaries (`W = 16`) into bar-filling events tied (`~`) onto
+    Beat 1 (`B1 = 0`) of the following measure.
     """
     n_bars = len(measures)
     rh_bars: List[List[Event]] = []
     lh_bars: List[List[Event]] = []
     tie_rh_end: List[bool] = [False] * n_bars
+    tie_lh_end: List[bool] = [False] * n_bars
 
     for m in measures:
         rh_bars.append([Event(ev.step, ev.duration, list(ev.pitches), ev.rolled) for ev in m.rh if ev.step >= 0])
         lh_bars.append([Event(ev.step, ev.duration, list(ev.pitches), ev.rolled) for ev in m.lh if ev.step >= 0])
 
-    for idx, m in enumerate(measures):
-        neg_evs = [ev for ev in m.rh if ev.step < 0]
-        if not neg_evs or idx == 0:
-            continue
-        ev = neg_evs[0]
-        prev_rh = rh_bars[idx - 1]
-        prev_end = max((e.step + e.duration for e in prev_rh), default=0.0)
-        if prev_end <= B4_AND:
-            # Place eighth-note anticipation on Beat 4& (step 14) of previous bar tied into current bar
-            prev_rh.append(Event(B4_AND, E, list(ev.pitches), False))
-            tie_rh_end[idx - 1] = True
-            rh_bars[idx].insert(0, Event(B1, max(E, ev.duration - E), list(ev.pitches), ev.rolled))
-        else:
-            rh_bars[idx].insert(0, Event(B1, ev.duration, list(ev.pitches), ev.rolled))
+    for idx in range(n_bars):
+        for bars_list, tie_end_list in ((rh_bars, tie_rh_end), (lh_bars, tie_lh_end)):
+            cur_evs = bars_list[idx]
+            for ev_idx, ev in enumerate(cur_evs):
+                if ev.step + ev.duration > W:
+                    overhang = (ev.step + ev.duration) - W
+                    cur_evs[ev_idx] = Event(ev.step, W - ev.step, list(ev.pitches), ev.rolled)
+                    assert idx + 1 < n_bars, f"Cross-barline overhang on final measure {idx + 1}"
+                    next_evs = bars_list[idx + 1]
+                    next_first = min((e.step for e in next_evs), default=W)
+                    assert next_first >= overhang, (
+                        f"Cross-barline tie overhang {overhang} collides with step {next_first} in bar {idx + 2}"
+                    )
+                    tie_end_list[idx] = True
+                    next_evs.insert(0, Event(B1, overhang, list(ev.pitches), False))
 
-    return rh_bars, lh_bars, tie_rh_end
+    return rh_bars, lh_bars, tie_rh_end, tie_lh_end
 
 
 def _rest_span_to_ly_tokens(start_tick: int, end_tick: int) -> List[str]:
@@ -1468,10 +1544,12 @@ def _render_hand_measure_ly(
     header_markup: str,
     dyn_markup: str,
     cur_ottava: int,
+    has_fermata: bool = False,
 ) -> Tuple[str, int]:
     """
     Compile one hand of a single 4/4 measure into LilyPond tokens totaling
-    exactly 32 thirty-second-note ticks.
+    exactly 32 thirty-second-note ticks. Automatically engraves two-voice
+    polyphony when a whole-note bass pedal coexists with a tenor countermelody.
     """
     if not events:
         prefix = ""
@@ -1480,27 +1558,48 @@ def _render_hand_measure_ly(
             cur_ottava = 0
         return f"{prefix}R1{header_markup}{dyn_markup}", cur_ottava
 
-    # Group events by integer 32nd-note start tick (0..31)
+    # Detect two-voice LH pedal polyphony (whole-note bass pedal + tenor countermelody)
+    if not is_rh:
+        pedal_evs = [ev for ev in events if ev.step == B1 and ev.duration == W]
+        upper_evs = [ev for ev in events if not (ev.step == B1 and ev.duration == W)]
+        if pedal_evs and upper_evs:
+            upper_str, _ = _render_hand_measure_ly(
+                upper_evs,
+                is_rh=False,
+                tie_at_end=tie_at_end,
+                header_markup="",
+                dyn_markup="",
+                cur_ottava=0,
+                has_fermata=False,
+            )
+            pedal_pitches = sorted({p for ev in pedal_evs for p in ev.pitches})
+            pedal_chord = _pitches_to_ly_chord(pedal_pitches)
+            return (
+                f"<< {{ \\voiceOne {upper_str} }} \\new Voice {{ \\voiceTwo {pedal_chord}1 }} >> \\oneVoice",
+                cur_ottava,
+            )
+
+    # Map events to exact 32nd-note ticks (0..31) with zero overlap
     by_tick = {}
     for ev in sorted(events, key=lambda e: e.step):
-        t_start = max(0, min(31, int(round(ev.step * 2))))
-        t_dur = 1 if ev.duration < S else max(2, int(round(ev.duration * 2)))
-        if t_start not in by_tick:
-            by_tick[t_start] = [t_dur, set(ev.pitches), ev.rolled]
-        else:
-            by_tick[t_start][0] = min(by_tick[t_start][0], t_dur)
-            by_tick[t_start][1].update(ev.pitches)
-            by_tick[t_start][2] = by_tick[t_start][2] or ev.rolled
+        t_start = int(round(ev.step * 2))
+        t_dur = int(round(ev.duration * 2))
+        assert 0 <= t_start < 32 and 1 <= t_dur <= 32 - t_start
+        assert t_start not in by_tick, f"Simultaneous unmerged events at tick {t_start}"
+        by_tick[t_start] = (t_dur, sorted(set(ev.pitches)), ev.rolled)
 
     sorted_ticks = sorted(by_tick.keys())
     tokens: List[str] = []
     cursor = 0
     attached_first = False
 
-    # Switch 8va cleanly at measure boundary so beams are never split mid-measure
+    # Hysteresis 8va rule: open 8va when top pitch reaches G6 (with bottom >= C5),
+    # and keep 8va continuous across high passages while top >= Eb6 and bottom >= C5.
     if is_rh:
         bar_top_p = max(max(v[1]) for v in by_tick.values())
-        desired_ottava = 1 if bar_top_p >= pitch("G6") else (0 if bar_top_p < pitch("F6") else cur_ottava)
+        bar_bottom_p = min(min(v[1]) for v in by_tick.values())
+        min_top = pitch("Eb6") if cur_ottava == 1 else pitch("G6")
+        desired_ottava = 1 if (bar_top_p >= min_top and bar_bottom_p >= pitch("C5")) else 0
         if desired_ottava != cur_ottava:
             tokens.append(f"\\ottava #{desired_ottava}")
             cur_ottava = desired_ottava
@@ -1517,16 +1616,13 @@ def _render_hand_measure_ly(
 
         next_t = sorted_ticks[i + 1] if i + 1 < len(sorted_ticks) else 32
         avail = next_t - t_start
-        raw_dur, pitch_set, rolled = by_tick[t_start]
-        if raw_dur == 1:
-            dur_ticks = 1
-        else:
-            dur_ticks = avail if avail <= raw_dur + 4 else min(avail, raw_dur)
+        dur_ticks, pitches, rolled = by_tick[t_start]
+        assert dur_ticks == avail, f"Symbolic-to-notated duration mismatch at tick {t_start}: {dur_ticks} != {avail}"
 
-        pitches = sorted(pitch_set)
         chord_str = _pitches_to_ly_chord(pitches)
-        chunks = _ticks_to_ly_chunks(dur_ticks)
+        chunks = _span_to_ly_chunks(t_start, t_start + dur_ticks)
         arp_str = "\\arpeggio" if rolled and len(pitches) > 1 else ""
+        fermata_str = "\\fermata" if (has_fermata and i == len(sorted_ticks) - 1) else ""
 
         for c_idx, c_tok in enumerate(chunks):
             extra = ""
@@ -1535,6 +1631,8 @@ def _render_hand_measure_ly(
                 if not attached_first:
                     extra += f"{header_markup}{dyn_markup}"
                     attached_first = True
+            if c_idx == len(chunks) - 1:
+                extra += fermata_str
             tie_str = " ~" if (c_idx < len(chunks) - 1 or (i == len(sorted_ticks) - 1 and tie_at_end and cursor + dur_ticks == 32)) else ""
             tokens.append(f"{chord_str}{c_tok}{extra}{tie_str}")
 
@@ -1552,15 +1650,29 @@ def _render_hand_measure_ly(
 def build_lilypond_source(measures: List[Measure]) -> str:
     """Generate a complete, Classical-Urtext GNU LilyPond 2.24 score from the symbolic measures."""
     validate_score(measures)
-    rh_bars, lh_bars, tie_rh_end = _prepare_engraving_measures(measures)
+    rh_bars, lh_bars, tie_rh_end, tie_lh_end = _split_cross_barline_ties(measures)
+
+    # Compile the Bar 1 eighth-note anacrusis directly from negative-step pickup events
+    anacrusis_evs = sorted((ev for ev in measures[0].rh if ev.step < 0), key=lambda e: e.step)
+    assert len(anacrusis_evs) == 4 and sum(int(round(e.duration * 2)) for e in anacrusis_evs) == 4
+    anacrusis_tokens = []
+    for a_idx, ev in enumerate(anacrusis_evs):
+        p_str = _pitches_to_ly_chord(ev.pitches)
+        d_str = _ticks_to_ly_chunks(int(round(ev.duration * 2)))[0]
+        if a_idx == 0:
+            anacrusis_tokens.append(f"{p_str}{d_str}([\\{measures[0].dynamic}")
+        elif a_idx == len(anacrusis_evs) - 1:
+            anacrusis_tokens.append(f"{p_str}{d_str}])")
+        else:
+            anacrusis_tokens.append(f"{p_str}{d_str}")
 
     rh_lines: List[str] = [
         "  \\clef treble",
         "  \\key c \\minor",
         "  \\numericTimeSignature",
         "  \\time 4/4",
-        "  \\tempo \"I. Intro\" 4 = 120",
-        "  \\partial 8 ees'''32([\\mp c''' bes'' g'']) |",
+        f'  \\tempo "{measures[0].section}" 4 = {measures[0].bpm}',
+        f"  \\partial 8 {' '.join(anacrusis_tokens)} |",
     ]
     lh_lines: List[str] = [
         "  \\clef bass",
@@ -1571,7 +1683,6 @@ def build_lilypond_source(measures: List[Measure]) -> str:
     ]
 
     cur_sec = measures[0].section
-    cur_bpm = measures[0].bpm
     cur_dyn = measures[0].dynamic
     cur_ottava = 0
 
@@ -1579,11 +1690,7 @@ def build_lilypond_source(measures: List[Measure]) -> str:
         header_parts: List[str] = []
         if m.section != cur_sec:
             cur_sec = m.section
-            cur_bpm = m.bpm
             rh_lines.append(f'  \\tempo "{m.section}" 4 = {m.bpm}')
-        elif m.bpm != cur_bpm:
-            cur_bpm = m.bpm
-            rh_lines.append(f"  \\tempo 4 = {m.bpm}")
 
         # Chord symbol & Roman numeral above the measure
         safe_chord = m.chord_symbol.replace('"', "'")
@@ -1597,6 +1704,7 @@ def build_lilypond_source(measures: List[Measure]) -> str:
             cur_dyn = m.dynamic
             dyn_markup = f"\\{m.dynamic}" if idx > 0 else ""
 
+        is_fermata = m.bar_num in (8, 116)
         rh_measure_str, cur_ottava = _render_hand_measure_ly(
             rh_bars[idx],
             is_rh=True,
@@ -1604,14 +1712,16 @@ def build_lilypond_source(measures: List[Measure]) -> str:
             header_markup=header_markup,
             dyn_markup=dyn_markup,
             cur_ottava=cur_ottava,
+            has_fermata=is_fermata,
         )
         lh_measure_str, _ = _render_hand_measure_ly(
             lh_bars[idx],
             is_rh=False,
-            tie_at_end=False,
+            tie_at_end=tie_lh_end[idx],
             header_markup="",
             dyn_markup="",
             cur_ottava=0,
+            has_fermata=is_fermata,
         )
 
         line_break = " \\break" if (m.bar_num % 4 == 0 and m.bar_num < len(measures)) else ""
@@ -1647,9 +1757,9 @@ def build_lilypond_source(measures: List[Measure]) -> str:
   left-margin = 14\\mm
   right-margin = 14\\mm
   indent = 0\\mm
-  system-system-spacing.basic-distance = #15
-  system-system-spacing.padding = #3.5
-  score-Markup-spacing.basic-distance = #10
+  system-system-spacing.basic-distance = #16
+  system-system-spacing.padding = #4.0
+  score-markup-spacing.basic-distance = #12
 }}
 
 upper = {{
@@ -1670,10 +1780,18 @@ lower = {{
   >>
   \\layout {{
     \\context {{
+      \\Staff
+      \\override OttavaBracket.outside-staff-priority = #400
+      \\override OttavaBracket.padding = #1.6
+      \\override TextScript.outside-staff-priority = #800
+      \\override TextScript.padding = #1.5
+    }}
+    \\context {{
       \\Score
       \\override BarNumber.break-visibility = ##(#f #t #t)
       \\override BarNumber.font-size = #1
-      \\override RehearsalMark.font-size = #1
+      \\override MetronomeMark.outside-staff-priority = #1200
+      \\override MetronomeMark.padding = #2.2
     }}
   }}
 }}
