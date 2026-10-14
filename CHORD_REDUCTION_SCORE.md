@@ -1,6 +1,8 @@
 # First-Principles Mathematical & Musical Reduction: *Extraordinary (不凡)*
 
 - **Piece**: *A Mortal's Journey「不凡 Extraordinary」— Ru's Piano Cover*
+- **Source Performance**: [https://youtu.be/JB31Aq_5Slw](https://youtu.be/JB31Aq_5Slw)
+- **Created With**: **Gemini 4 Argon high in Antigravity CLI**
 - **Key**: **C Natural Minor** (`C, D, Eb, F, G, Ab, Bb`) with **C Dorian** (`A` natural on the `F` major IV chord) & **G Dominant** (`Gm/G5` at the climax)
 - **Meter**: **4/4** on a pure rational 16th-note grid (`0` = Beat 1, `4` = Beat 2, `8` = Beat 3, `12` = Beat 4; `~` denotes an upward rolled chord)
 
