@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+original_audio.wav
+tmp_*.wav
+tmp_*.mp3
