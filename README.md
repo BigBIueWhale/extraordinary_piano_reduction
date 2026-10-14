@@ -1,12 +1,12 @@
 # Extraordinary (不凡) — First-Principles Piano Reduction ("PNG → SVG")
 
-> **Created with Gemini 4 Argon high in Antigravity CLI** — combining innate multimodal audio perception with pure first-principles music-theoretic reduction.
+> **Created with Gemini 4 Argon high in Antigravity CLI** — combining innate multimodal audio perception with pure first-principles music-theoretic reduction and a 96 kHz / 64-bit float physical concert-grand mastering pipeline.
 
-A complete mathematical and music-theoretic reduction of **Ru's Piano Cover** of **「不凡 Extraordinary」** (*A Mortal's Journey to Immortality / 凡人修仙傳 — Han Li's Nascent Soul Breakthrough Theme*, originally by Wang铮亮 / Yusheng):
-
-- **Source Performance**: [A Mortal's Journey「不凡 Extraordinary」Ru's Piano Cover (YouTube)](https://youtu.be/JB31Aq_5Slw)
-- **Full Bar-by-Bar Symbolic Score**: [`CHORD_REDUCTION_SCORE.md`](CHORD_REDUCTION_SCORE.md)
-- **First-Principles Generator & Virtual Pianist Compiler**: [`extraordinary_reduction.py`](extraordinary_reduction.py)
+- 🎧 **Listen to the Final Rendered Audio**: **[`extraordinary.mp3`](extraordinary.mp3)** *(48 kHz LAME V0 stereo master, rendered via [`render_in_docker.sh`](render_in_docker.sh) & [`Dockerfile`](Dockerfile))*
+- 🎹 **Playable First-Principles MIDI**: **[`extraordinary.mid`](extraordinary.mid)**
+- 📜 **Complete Bar-by-Bar Symbolic Score**: **[`CHORD_REDUCTION_SCORE.md`](CHORD_REDUCTION_SCORE.md)**
+- 🎬 **Source Performance**: [A Mortal's Journey「不凡 Extraordinary」Ru's Piano Cover (YouTube)](https://youtu.be/JB31Aq_5Slw)
+- ⚙️ **Single-Mode Generator & 96 kHz Mastering Engine**: **[`extraordinary_reduction.py`](extraordinary_reduction.py)**
 
 ---
 
@@ -14,17 +14,36 @@ A complete mathematical and music-theoretic reduction of **Ru's Piano Cover** of
 
 Most automated or reverse-engineered MIDI transcriptions treat a musical performance like a raster image (**PNG**): they scrape arrays of floating-point onset timestamps (`[0.81, 2.73, 4.72, ...]`), arbitrary fractional note durations, and per-note MIDI velocities (`61, 60, 57, 72...`). The result is brittle, opaque, and machine-generated.
 
-This repository treats transcription as a **mathematical reduction into symbolic primitives ("SVG")**. Rather than hard-coding scraped floating-point timings or velocity tables, [`extraordinary_reduction.py`](extraordinary_reduction.py) constructs all 116 measures of the arrangement from **first principles of music theory, compositional form, and piano performance**:
+This repository treats transcription as a **mathematical reduction into symbolic primitives ("SVG")**. Rather than hard-coding scraped floating-point timings or velocity tables, [`extraordinary_reduction.py`](extraordinary_reduction.py) constructs all 116 measures of the arrangement from **first principles of music theory, compositional form, and piano performance** in a single canonical, defensively verified pipeline with zero fallbacks:
 
-1. **Zero Hard-Coded Timestamps**: Time is integrated naturally from section tempo markings (`BPM`) and cadence *ritardandos*.
+1. **Zero Hard-Coded Timestamps**: Time is integrated naturally from section tempo markings (`BPM`), phrase-arch agogic breathing (`+4%` broadening on cadence bars), and *molto ritardando* cadences.
 2. **Pure `"1 e & a"` Rhythmic Algebra**: Every note onset and duration is expressed in exact rational subdivisions of a $4/4$ measure:
    $$\text{W}=16,\quad \text{DH}=12,\quad \text{H}=8,\quad \text{DQ}=6,\quad \text{Q}=4,\quad \text{DE}=3,\quad \text{E}=2,\quad \text{S}=1,\quad \text{T}=0.5$$
    on the standard 16th-note grid (`B1, B1_E, B1_AND, B1_A, B2, ...`). The piece's signature **tresillo (`3 + 3 + 2`)** syncopation falls naturally on `(B1, B1_A, B2_AND)` and `(B3, B3_A, B4_AND)`.
-3. **Zero Hard-Coded Velocities (Virtual Pianist Model)**: Expressive dynamics are derived from section markings (`pp, p, mp, mf, f, ff`), left/right-hand balance, metric accent hierarchy, soprano top-voice projection, and `18 ms` upward chord rolls (`Roll`).
+3. **Zero Hard-Coded Velocities (Virtual Pianist Model)**: Expressive dynamics are derived from section markings (`pp, p, mp, mf, f, ff`), left/right-hand balance (`-12` velocity on LH accompaniment), metric accent hierarchy, soprano top-voice projection (`+4` velocity on top voice), syncopated legato sustain pedaling (`CC64` released `35 ms` before harmonic change and caught `15 ms` after), and natural bottom-to-top chord voicing micro-spread (`4.5 ms` on block chords/octaves, `20 ms` on lyrical `Roll` chords).
 
 ---
 
-## 2. Tonal, Modal & Compositional Basis
+## 2. How [`extraordinary.mp3`](extraordinary.mp3) Is Rendered (96 kHz / 64-Bit Float Pipeline)
+
+The rendered audio file [`extraordinary.mp3`](extraordinary.mp3) is produced deterministically inside the version-pinned [`Dockerfile`](Dockerfile) via [`render_in_docker.sh`](render_in_docker.sh) and [`synthesize_and_master_audio()`](extraordinary_reduction.py#L1092-L1175):
+
+1. **Dual-Engine 96 kHz 32-Bit Float FluidSynth Synthesis (`fluidsynth=2.3.1-2`)**:
+   - [`extraordinary.mid`](extraordinary.mid) is rendered at **96,000 Hz** (`float32` PCM, internal chorus/reverb disabled) through two complementary SoundFonts pinned in Debian Bookworm:
+     - **Primary Body Layer (`82%`)**: `musescore-general-soundfont-lossless=0.2.1-1` (`/usr/share/sounds/sf2/MuseScore_General_Full.sf2`, 478 MB uncompressed concert grand with multi-velocity layers).
+     - **Close-Mic Hammer & String Definition Layer (`18%`)**: `fluid-soundfont-gm=3.1-5.3` (`/usr/share/sounds/sf2/FluidR3_GM.sf2`), zero-phase bandpass-focused (`180 Hz – 5,800 Hz` via 4th-order Butterworth `scipy.signal.sosfiltfilt`) so it adds midrange hammer articulation without sub-bass build-up or upper-register metallic glare.
+2. **24-Mode Physical Sympathetic String & Soundboard Resonance Bank (`scipy==1.13.1` at 96 kHz 64-Bit Float)**:
+   - Models the undamped C-minor / $E\flat$-major harmonic overtone series of a 9-foot concert grand (`C2` through `G6`, 24 high-$Q$ parallel resonators via `scipy.signal.iirpeak` + `sosfilt` with natural bass-left / treble-right spatial panning).
+3. **5-Stage Zero-Phase RBJ Biquad Mastering EQ (`sosfiltfilt` at 96 kHz)**:
+   - Subsonic high-pass (`24 Hz`), wooden soundboard fundamental warmth (`+2.0 dB` at `110 Hz`), lower-mid boxiness cut (`-1.8 dB` at `320 Hz`), hammer-felt upper-mid smoothing (`-2.6 dB` at `3,150 Hz` for silky `ff` climaxes in Octaves 6–7), and silk air sheen (`+1.2 dB` at `8,500 Hz`).
+4. **True-Stereo 96 kHz Concert Hall Impulse Response Synthesis & FFT Convolution (`scipy.signal.fftconvolve`)**:
+   - Synthesizes a deterministic **2.8-second True-Stereo Concert Hall Impulse Response** ($268,800$ samples/channel at `96 kHz`) featuring **16 specular timber-hall early reflections** (`14 ms – 84 ms` with ITD/ILD and `3.8 kHz` wall absorption) and a **3-band frequency-dependent diffuse reverb tail** (`RT60 = 1.75s` low, `2.05s` mid, `1.10s` high air absorption) with a `22 ms` pre-delay envelope so every transient attack remains crisp before the hall blooms.
+5. **Mid/Side Stereo Imaging, Soft-Knee Transformer Saturation & 48 kHz LAME `V0` Encoding (`ffmpeg=7:5.1.9-0+deb12u1`)**:
+   - Applies `+10%` Mid/Side width above `220 Hz`, continuous soft-knee analog saturation (`tanh`), true-peak normalization to `-0.8 dBFS`, Kaiser-windowed polyphase anti-aliased resampling (`96 kHz → 48 kHz` via `scipy.signal.resample_poly`), and highest-precision LAME VBR `V0` encoding (`-c:a libmp3lame -q:a 0 -compression_level 0`).
+
+---
+
+## 3. Tonal, Modal & Compositional Basis
 
 ### Modal Vocabulary
 - **Primary Key**: **C Natural Minor** ($\{C, D, E\flat, F, G, A\flat, B\flat\}$)
@@ -46,16 +65,9 @@ All 116 measures of left-hand accompaniment are generated by **8 compositional f
 - `lh_climax_arpeggio(root_name, tresillo_punch, high_span)` — Interval-based wide-span climax arpeggio with optional tresillo (`B1_A`) bass punch.
 - `lh_climax_wave(root_name, beat4_bass)` — Sweeping 2-octave eighth-note wave arpeggio (`[R, R+12] -> [R+7] -> [R+12] -> [R+19] -> [R+24, R+31]`).
 
-### Right-Hand Voicing Operators
-- `N(*names)` — Single note or explicit multi-note chord voicing.
-- `Oct(top_name)` — Octave doubling `[p - 12, p]`.
-- `SixthOct(top_name)` — Signature 3-note sixth+octave voicing `[p - 12, diatonic_6th, p]` in C minor (e.g., `F6 -> [F5, D6, F6]`, `G6 -> [G5, Eb6, G6]`, `Eb6 -> [Eb5, C6, Eb6]`).
-- `FourthOct(top_name)` — Upper perfect-fourth dyad `[p - 5, p]`.
-- `Roll(step, duration, pitches)` — Expressive bottom-to-top arpeggiated chord (`18 ms` per voice).
-
 ---
 
-## 3. Symphonic Architecture (Measures 1–116)
+## 4. Symphonic Architecture (Measures 1–116)
 
 | Section | Bars | Tempo | Dynamic | Harmonic Progression & Musical Texture |
 | :--- | :---: | :---: | :---: | :--- |
@@ -74,24 +86,18 @@ All 116 measures of left-hand accompaniment are generated by **8 compositional f
 
 ---
 
-## 4. Repository Contents
+## 5. Repository Contents & Reproducible Execution
 
 | File | Description |
 | :--- | :--- |
-| [`extraordinary_reduction.py`](extraordinary_reduction.py) | Self-contained first-principles Python generator and Virtual Pianist MIDI compiler |
+| [`extraordinary.mp3`](extraordinary.mp3) | Final 96 kHz → 48 kHz LAME `V0` mastered concert-grand audio render |
+| [`extraordinary.mid`](extraordinary.mid) | Playable MIDI of the complete 116-measure symphonic arrangement |
 | [`CHORD_REDUCTION_SCORE.md`](CHORD_REDUCTION_SCORE.md) | Complete bar-by-bar symbolic score (Measures 1–116) with chord symbols, Roman numerals, tempos, dynamics, and exact LH/RH voicings |
-| [`extraordinary_main_piece.mid`](extraordinary_main_piece.mid) | Playable MIDI of the complete 116-measure symphonic arrangement |
-| [`extraordinary_full_reproduction.mid`](extraordinary_full_reproduction.mid) | Playable MIDI of the full two-strophe Da-Capo form (`score + score[3:]`, matching the full two-pass structure of the YouTube video) |
-| [`extraordinary_chord_slices.mid`](extraordinary_chord_slices.mid) | Quantized vertical chord-slice reduction (`chord_block_mode=True`) for harmonic inspection |
+| [`extraordinary_reduction.py`](extraordinary_reduction.py) | Single-mode first-principles symbolic generator, Virtual Pianist MIDI compiler, and 96 kHz / 64-bit float acoustic mastering engine |
+| [`Dockerfile`](Dockerfile) | Digest- and version-pinned Debian Bookworm + Python 3.11.15 build environment |
+| [`render_in_docker.sh`](render_in_docker.sh) | Defensive (`set -euo pipefail`) one-command build, offline `--network=none` render, verification, and image cleanup script |
 
----
-
-## 5. Reproducing the MIDI Files (Isolated Docker Execution)
-
-To re-compile all MIDI files and [`CHORD_REDUCTION_SCORE.md`](CHORD_REDUCTION_SCORE.md) without installing any packages on your host system:
-
+### Reproducing Everything from Scratch
 ```bash
-docker run --rm -u "$(id -u):$(id -g)" \
-  -v "$PWD:/workspace" -w /workspace \
-  python:3.11-slim bash -c "pip install --no-cache-dir pretty_midi && python3 extraordinary_reduction.py"
+./render_in_docker.sh
 ```

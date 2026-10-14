@@ -2,6 +2,7 @@
 
 - **Piece**: *A Mortal's Journey「不凡 Extraordinary」— Ru's Piano Cover*
 - **Source Performance**: [https://youtu.be/JB31Aq_5Slw](https://youtu.be/JB31Aq_5Slw)
+- **Rendered Audio**: [`extraordinary.mp3`](extraordinary.mp3) | **MIDI**: [`extraordinary.mid`](extraordinary.mid)
 - **Created With**: **Gemini 4 Argon high in Antigravity CLI**
 - **Key**: **C Natural Minor** (`C, D, Eb, F, G, Ab, Bb`) with **C Dorian** (`A` natural on the `F` major IV chord) & **G Dominant** (`Gm/G5` at the climax)
 - **Meter**: **4/4** on a pure rational 16th-note grid (`0` = Beat 1, `4` = Beat 2, `8` = Beat 3, `12` = Beat 4; `~` denotes an upward rolled chord)
@@ -12,9 +13,9 @@
 | :--- | :--- | :--- |
 | **Tonal Basis** | C Minor + Dorian $\natural\hat{6}$ + Pentatonic $\{C, E\flat, F, G, B\flat\}$ | Modal Gufeng (古風) harmonic & ornamental space |
 | **Rhythmic Algebra** | Pure rational subdivisions (`W=16, H=8, Q=4, DE=3, E=2, S=1, T=0.5`) | Zero hard-coded timestamps; exact metric & tresillo (`3+3+2`) geometry |
-| **Left-Hand Functors** | `lh_verse_pedal`, `lh_prechorus_groove`, `lh_chorus_drive`, `lh_f_dorian_sweep`, `lh_breakthrough_ostinato`, `lh_climax_arpeggio` | 6 accompaniment archetypes spanning all 116 measures |
+| **Left-Hand Functors** | `lh_verse_pedal`, `lh_prechorus_groove`, `lh_chorus_drive`, `lh_f_dorian_sweep`, `lh_breakthrough_ostinato`, `lh_climax_arpeggio`, `lh_lyrical_arch`, `lh_climax_wave` | 8 accompaniment archetypes spanning all 116 measures |
 | **Right-Hand Operators** | `N`, `Oct`, `SixthOct`, `FourthOct`, `Roll`, `pentatonic_cascade` | Idiomatic solo-piano voicings & pentatonic waterfalls |
-| **Virtual Pianist** | Section BPM + Dynamic markings (`pp`–`ff`) + Metric/Soprano voicing model | Natural expressive dynamics, top-note projection, and chord rolls |
+| **Virtual Pianist & 96 kHz Mastering** | Phrase-arch agogic breathing + Dual 96 kHz SoundFont synthesis + 24-mode sympathetic string bank + Concert-Hall FFT IR convolution | Studio-grade concert grand piano rendering (`extraordinary.mp3`) |
 
 ## 2. Complete Bar-by-Bar Symbolic Score (Measures 1–116)
 
