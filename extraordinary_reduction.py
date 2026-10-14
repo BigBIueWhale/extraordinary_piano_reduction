@@ -60,6 +60,7 @@ import subprocess
 import tempfile
 from typing import List, Tuple
 import numpy as np
+from PIL import Image
 import pretty_midi
 from scipy import signal
 import soundfile as sf
@@ -1300,7 +1301,7 @@ def export_markdown_score(measures: List[Measure], out_md: str) -> None:
         "",
         "- **Piece**: *A Mortal's Journey「不凡 Extraordinary」— Ru's Piano Cover*",
         "- **Source Performance**: [https://youtu.be/JB31Aq_5Slw](https://youtu.be/JB31Aq_5Slw)",
-        "- **Rendered Audio**: [`extraordinary.mp3`](extraordinary.mp3) | **MIDI**: [`extraordinary.mid`](extraordinary.mid)",
+        "- **Rendered Audio**: [`extraordinary.mp3`](extraordinary.mp3) | **MIDI**: [`extraordinary.mid`](extraordinary.mid) | **Sheet Music**: [`extraordinary_sheet_music.png`](extraordinary_sheet_music.png)",
         "- **Created With**: **Gemini 4 Argon high in Antigravity CLI**",
         "- **Key**: **C Natural Minor** (`C, D, Eb, F, G, Ab, Bb`) with **C Dorian** (`A` natural on the `F` major IV chord) & **G Dominant** (`Gm/G5` at the climax)",
         "- **Meter**: **4/4** on a pure rational 16th-note grid (`0` = Beat 1, `4` = Beat 2, `8` = Beat 3, `12` = Beat 4; `~` denotes an upward rolled chord)",
@@ -1342,10 +1343,401 @@ def export_markdown_score(measures: List[Measure], out_md: str) -> None:
     assert os.path.isfile(out_md) and os.path.getsize(out_md) > 5000, f"Score write failed: {out_md}"
 
 
+# =============================================================================
+# 9. CLASSICAL PIANO SHEET MUSIC ENGRAVER (LILYPOND + SUPERSAMPLED TALL PNG)
+# =============================================================================
+
+LY_PITCH_NAMES = ("c", "des", "d", "ees", "e", "f", "fis", "g", "aes", "a", "bes", "b")
+
+LY_DUR_TABLE: Tuple[Tuple[int, str], ...] = (
+    (32, "1"),
+    (24, "2."),
+    (16, "2"),
+    (12, "4."),
+    (8,  "4"),
+    (6,  "8."),
+    (4,  "8"),
+    (3,  "16."),
+    (2,  "16"),
+    (1,  "32"),
+)
+
+
+def _midi_to_ly_pitch(midi_num: int) -> str:
+    """Convert MIDI pitch number to C-minor spelled LilyPond absolute pitch."""
+    pc = midi_num % 12
+    octv = midi_num // 12 - 1
+    marks = ("'" * (octv - 3)) if octv >= 3 else ("," * (3 - octv))
+    return f"{LY_PITCH_NAMES[pc]}{marks}"
+
+
+def _pitches_to_ly_chord(pitches: List[int]) -> str:
+    """Format one or more MIDI pitches as a LilyPond note or <...> chord."""
+    unique = sorted(set(pitches))
+    assert len(unique) > 0
+    if len(unique) == 1:
+        return _midi_to_ly_pitch(unique[0])
+    return "<" + " ".join(_midi_to_ly_pitch(p) for p in unique) + ">"
+
+
+def _ticks_to_ly_chunks(dur_ticks: int) -> List[str]:
+    """
+    Decompose an exact 32nd-note tick duration (1..32) into standard LilyPond
+    duration tokens whose sum is guaranteed to equal `dur_ticks`.
+    """
+    assert 1 <= dur_ticks <= 32, f"Invalid tick duration: {dur_ticks}"
+    chunks: List[str] = []
+    rem = dur_ticks
+    for ticks, tok in LY_DUR_TABLE:
+        while rem >= ticks:
+            chunks.append(tok)
+            rem -= ticks
+    assert rem == 0
+    return chunks
+
+
+def _prepare_engraving_measures(
+    measures: List[Measure],
+) -> Tuple[List[List[Event]], List[List[Event]], List[bool]]:
+    """
+    Prepare per-measure RH and LH event lists on the [0, 16) measure grid,
+    converting Pre-Chorus (-E) syncopated chord anticipations into idiomatic
+    Beat 4& eighth-note chords tied (`~`) across the barline.
+    """
+    n_bars = len(measures)
+    rh_bars: List[List[Event]] = []
+    lh_bars: List[List[Event]] = []
+    tie_rh_end: List[bool] = [False] * n_bars
+
+    for m in measures:
+        rh_bars.append([Event(ev.step, ev.duration, list(ev.pitches), ev.rolled) for ev in m.rh if ev.step >= 0])
+        lh_bars.append([Event(ev.step, ev.duration, list(ev.pitches), ev.rolled) for ev in m.lh if ev.step >= 0])
+
+    for idx, m in enumerate(measures):
+        neg_evs = [ev for ev in m.rh if ev.step < 0]
+        if not neg_evs or idx == 0:
+            continue
+        ev = neg_evs[0]
+        prev_rh = rh_bars[idx - 1]
+        prev_end = max((e.step + e.duration for e in prev_rh), default=0.0)
+        if prev_end <= B4_AND:
+            # Place eighth-note anticipation on Beat 4& (step 14) of previous bar tied into current bar
+            prev_rh.append(Event(B4_AND, E, list(ev.pitches), False))
+            tie_rh_end[idx - 1] = True
+            rh_bars[idx].insert(0, Event(B1, max(E, ev.duration - E), list(ev.pitches), ev.rolled))
+        else:
+            rh_bars[idx].insert(0, Event(B1, ev.duration, list(ev.pitches), ev.rolled))
+
+    return rh_bars, lh_bars, tie_rh_end
+
+
+def _rest_span_to_ly_tokens(start_tick: int, end_tick: int) -> List[str]:
+    """
+    Decompose a rest interval [start_tick, end_tick) into metric-aligned
+    LilyPond rest tokens (advancing from fine offbeats to coarser beat boundaries).
+    """
+    assert 0 <= start_tick < end_tick <= 32
+    if start_tick == 0 and end_tick == 32:
+        return ["R1"]
+    tokens: List[str] = []
+    cur = start_tick
+    while cur < end_tick:
+        rem = end_tick - cur
+        if cur % 16 == 0 and rem >= 16:
+            tokens.append("r2")
+            cur += 16
+        elif cur % 8 == 0 and rem >= 8:
+            tokens.append("r4")
+            cur += 8
+        elif cur % 4 == 0 and rem >= 4:
+            tokens.append("r8")
+            cur += 4
+        elif cur % 2 == 0 and rem >= 2:
+            tokens.append("r16")
+            cur += 2
+        else:
+            tokens.append("r32")
+            cur += 1
+    return tokens
+
+
+def _render_hand_measure_ly(
+    events: List[Event],
+    is_rh: bool,
+    tie_at_end: bool,
+    header_markup: str,
+    dyn_markup: str,
+    cur_ottava: int,
+) -> Tuple[str, int]:
+    """
+    Compile one hand of a single 4/4 measure into LilyPond tokens totaling
+    exactly 32 thirty-second-note ticks.
+    """
+    if not events:
+        prefix = ""
+        if cur_ottava != 0:
+            prefix = "\\ottava #0 "
+            cur_ottava = 0
+        return f"{prefix}R1{header_markup}{dyn_markup}", cur_ottava
+
+    # Group events by integer 32nd-note start tick (0..31)
+    by_tick = {}
+    for ev in sorted(events, key=lambda e: e.step):
+        t_start = max(0, min(31, int(round(ev.step * 2))))
+        t_dur = 1 if ev.duration < S else max(2, int(round(ev.duration * 2)))
+        if t_start not in by_tick:
+            by_tick[t_start] = [t_dur, set(ev.pitches), ev.rolled]
+        else:
+            by_tick[t_start][0] = min(by_tick[t_start][0], t_dur)
+            by_tick[t_start][1].update(ev.pitches)
+            by_tick[t_start][2] = by_tick[t_start][2] or ev.rolled
+
+    sorted_ticks = sorted(by_tick.keys())
+    tokens: List[str] = []
+    cursor = 0
+    attached_first = False
+
+    # Switch 8va cleanly at measure boundary so beams are never split mid-measure
+    if is_rh:
+        bar_top_p = max(max(v[1]) for v in by_tick.values())
+        desired_ottava = 1 if bar_top_p >= pitch("G6") else (0 if bar_top_p < pitch("F6") else cur_ottava)
+        if desired_ottava != cur_ottava:
+            tokens.append(f"\\ottava #{desired_ottava}")
+            cur_ottava = desired_ottava
+
+    for i, t_start in enumerate(sorted_ticks):
+        if t_start > cursor:
+            for r_idx, r_tok in enumerate(_rest_span_to_ly_tokens(cursor, t_start)):
+                extra = ""
+                if not attached_first and r_idx == 0:
+                    extra = f"{header_markup}{dyn_markup}"
+                    attached_first = True
+                tokens.append(f"{r_tok}{extra}")
+            cursor = t_start
+
+        next_t = sorted_ticks[i + 1] if i + 1 < len(sorted_ticks) else 32
+        avail = next_t - t_start
+        raw_dur, pitch_set, rolled = by_tick[t_start]
+        if raw_dur == 1:
+            dur_ticks = 1
+        else:
+            dur_ticks = avail if avail <= raw_dur + 4 else min(avail, raw_dur)
+
+        pitches = sorted(pitch_set)
+        chord_str = _pitches_to_ly_chord(pitches)
+        chunks = _ticks_to_ly_chunks(dur_ticks)
+        arp_str = "\\arpeggio" if rolled and len(pitches) > 1 else ""
+
+        for c_idx, c_tok in enumerate(chunks):
+            extra = ""
+            if c_idx == 0:
+                extra += arp_str
+                if not attached_first:
+                    extra += f"{header_markup}{dyn_markup}"
+                    attached_first = True
+            tie_str = " ~" if (c_idx < len(chunks) - 1 or (i == len(sorted_ticks) - 1 and tie_at_end and cursor + dur_ticks == 32)) else ""
+            tokens.append(f"{chord_str}{c_tok}{extra}{tie_str}")
+
+        cursor += dur_ticks
+
+    if cursor < 32:
+        for r_tok in _rest_span_to_ly_tokens(cursor, 32):
+            tokens.append(r_tok)
+        cursor = 32
+
+    assert cursor == 32, f"Measure tick sum mismatch: {cursor} != 32"
+    return " ".join(tokens), cur_ottava
+
+
+def build_lilypond_source(measures: List[Measure]) -> str:
+    """Generate a complete, Classical-Urtext GNU LilyPond 2.24 score from the symbolic measures."""
+    validate_score(measures)
+    rh_bars, lh_bars, tie_rh_end = _prepare_engraving_measures(measures)
+
+    rh_lines: List[str] = [
+        "  \\clef treble",
+        "  \\key c \\minor",
+        "  \\numericTimeSignature",
+        "  \\time 4/4",
+        "  \\tempo \"I. Intro\" 4 = 120",
+        "  \\partial 8 ees'''32([\\mp c''' bes'' g'']) |",
+    ]
+    lh_lines: List[str] = [
+        "  \\clef bass",
+        "  \\key c \\minor",
+        "  \\numericTimeSignature",
+        "  \\time 4/4",
+        "  \\partial 8 r8 |",
+    ]
+
+    cur_sec = measures[0].section
+    cur_bpm = measures[0].bpm
+    cur_dyn = measures[0].dynamic
+    cur_ottava = 0
+
+    for idx, m in enumerate(measures):
+        header_parts: List[str] = []
+        if m.section != cur_sec:
+            cur_sec = m.section
+            cur_bpm = m.bpm
+            rh_lines.append(f'  \\tempo "{m.section}" 4 = {m.bpm}')
+        elif m.bpm != cur_bpm:
+            cur_bpm = m.bpm
+            rh_lines.append(f"  \\tempo 4 = {m.bpm}")
+
+        # Chord symbol & Roman numeral above the measure
+        safe_chord = m.chord_symbol.replace('"', "'")
+        header_parts.append(
+            f'^\\markup {{ \\override #\'(font-name . "Noto Sans CJK SC Bold") \\small "{safe_chord}" \\tiny " ({m.roman})" }}'
+        )
+        header_markup = "".join(header_parts)
+
+        dyn_markup = ""
+        if idx == 0 or m.dynamic != cur_dyn:
+            cur_dyn = m.dynamic
+            dyn_markup = f"\\{m.dynamic}" if idx > 0 else ""
+
+        rh_measure_str, cur_ottava = _render_hand_measure_ly(
+            rh_bars[idx],
+            is_rh=True,
+            tie_at_end=tie_rh_end[idx],
+            header_markup=header_markup,
+            dyn_markup=dyn_markup,
+            cur_ottava=cur_ottava,
+        )
+        lh_measure_str, _ = _render_hand_measure_ly(
+            lh_bars[idx],
+            is_rh=False,
+            tie_at_end=False,
+            header_markup="",
+            dyn_markup="",
+            cur_ottava=0,
+        )
+
+        line_break = " \\break" if (m.bar_num % 4 == 0 and m.bar_num < len(measures)) else ""
+        barline = ' \\bar "|."' if m.bar_num == len(measures) else " |"
+
+        if m.bar_num == len(measures) and cur_ottava != 0:
+            rh_measure_str += " \\ottava #0"
+            cur_ottava = 0
+
+        rh_lines.append(f"  % Bar {m.bar_num} ({m.chord_symbol})")
+        rh_lines.append(f"  {rh_measure_str}{barline}{line_break}")
+        lh_lines.append(f"  % Bar {m.bar_num}")
+        lh_lines.append(f"  {lh_measure_str}{barline}")
+
+    ly_doc = f"""\\version "2.24.1"
+
+#(set-global-staff-size 18)
+
+\\header {{
+  title = \\markup {{ \\override #'(font-name . "Noto Serif CJK SC Bold") \\abs-fontsize #22 "Extraordinary 「不凡」" }}
+  subtitle = \\markup {{ \\override #'(font-name . "Noto Sans CJK SC Medium") \\abs-fontsize #13 "A Mortal's Journey to Immortality (凡人修仙傳 · 韓立元嬰突破版) — Concert Piano Reduction" }}
+  subsubtitle = \\markup {{ \\abs-fontsize #10 "First-Principles Mathematical & Musical Reduction (C Minor / C Dorian IV) · Source: https://youtu.be/JB31Aq_5Slw" }}
+  composer = \\markup {{ \\override #'(font-name . "Noto Sans CJK SC") "Original: Wang Zhengliang (王錚亮) & Yusheng · Piano Arrangement: Ru's Piano" }}
+  arranger = \\markup {{ \\italic "Transcribed & Engraved from First Principles with Gemini 4 Argon high in Antigravity CLI" }}
+  tagline = ##f
+}}
+
+\\paper {{
+  page-breaking = #ly:one-page-breaking
+  paper-width = 240\\mm
+  top-margin = 14\\mm
+  bottom-margin = 14\\mm
+  left-margin = 14\\mm
+  right-margin = 14\\mm
+  indent = 0\\mm
+  system-system-spacing.basic-distance = #15
+  system-system-spacing.padding = #3.5
+  score-Markup-spacing.basic-distance = #10
+}}
+
+upper = {{
+{chr(10).join(rh_lines)}
+}}
+
+lower = {{
+{chr(10).join(lh_lines)}
+}}
+
+\\score {{
+  \\new PianoStaff \\with {{
+    instrumentName = \\markup {{ \\bold "Piano" }}
+    \\accidentalStyle piano
+  }} <<
+    \\new Staff = "upper" \\upper
+    \\new Staff = "lower" \\lower
+  >>
+  \\layout {{
+    \\context {{
+      \\Score
+      \\override BarNumber.break-visibility = ##(#f #t #t)
+      \\override BarNumber.font-size = #1
+      \\override RehearsalMark.font-size = #1
+    }}
+  }}
+}}
+"""
+    return ly_doc
+
+
+def export_sheet_music_png(measures: List[Measure], out_png_path: str) -> None:
+    """
+    Compile the symbolic score to GNU LilyPond vector PDF on a single continuous
+    tall page, rasterize at supersampled 400 DPI via Poppler `pdftoppm`, and
+    downsample with Lanczos-3 anti-aliasing to a crisp 2400px-wide tall PNG.
+    """
+    Image.MAX_IMAGE_PIXELS = None
+    ly_source = build_lilypond_source(measures)
+
+    with tempfile.TemporaryDirectory(prefix="extraordinary_sheet_") as tmpdir:
+        ly_path = os.path.join(tmpdir, "extraordinary_score.ly")
+        pdf_prefix = os.path.join(tmpdir, "extraordinary_score")
+        pdf_path = f"{pdf_prefix}.pdf"
+        raw_png_prefix = os.path.join(tmpdir, "supersampled_raw")
+        raw_png_path = f"{raw_png_prefix}.png"
+
+        with open(ly_path, "w", encoding="utf-8") as f:
+            f.write(ly_source)
+
+        subprocess.run(
+            ["lilypond", "--pdf", "-dno-point-and-click", "-o", pdf_prefix, ly_path],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        assert os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 10_000, "LilyPond PDF generation failed"
+
+        # Rasterize vector PDF at supersampled 400 DPI
+        subprocess.run(
+            ["pdftoppm", "-png", "-r", "400", "-singlefile", pdf_path, raw_png_prefix],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        assert os.path.isfile(raw_png_path), "pdftoppm supersampled rasterization failed"
+
+        # 2x supersampled Lanczos-3 anti-aliased downsample to 2400 px width
+        with Image.open(raw_png_path) as img:
+            img_rgb = img.convert("RGB")
+            w_raw, h_raw = img_rgb.size
+            assert w_raw > 3000 and h_raw > 10000, f"Unexpected raw sheet size: {w_raw}x{h_raw}"
+            target_w = 2400
+            target_h = int(round(h_raw * (target_w / float(w_raw))))
+            downsampled = img_rgb.resize((target_w, target_h), resample=Image.Resampling.LANCZOS)
+            downsampled.save(out_png_path, format="PNG", optimize=True, compress_level=9)
+
+    assert os.path.isfile(out_png_path) and os.path.getsize(out_png_path) > 500_000, f"PNG output invalid: {out_png_path}"
+
+
 if __name__ == "__main__":
     score = build_score()
     compile_to_midi(score, "extraordinary.mid")
     export_markdown_score(score, "CHORD_REDUCTION_SCORE.md")
+    export_sheet_music_png(score, "extraordinary_sheet_music.png")
     synthesize_and_master_audio("extraordinary.mid", "extraordinary.mp3")
-    print("Successfully compiled extraordinary.mid, CHORD_REDUCTION_SCORE.md, and 96 kHz mastered extraordinary.mp3.")
+    print(
+        "Successfully compiled extraordinary.mid, CHORD_REDUCTION_SCORE.md, "
+        "extraordinary_sheet_music.png, and 96 kHz mastered extraordinary.mp3."
+    )
 

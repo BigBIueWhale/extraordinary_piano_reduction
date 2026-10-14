@@ -2,7 +2,7 @@
 
 - **Piece**: *A Mortal's Journey「不凡 Extraordinary」— Ru's Piano Cover*
 - **Source Performance**: [https://youtu.be/JB31Aq_5Slw](https://youtu.be/JB31Aq_5Slw)
-- **Rendered Audio**: [`extraordinary.mp3`](extraordinary.mp3) | **MIDI**: [`extraordinary.mid`](extraordinary.mid)
+- **Rendered Audio**: [`extraordinary.mp3`](extraordinary.mp3) | **MIDI**: [`extraordinary.mid`](extraordinary.mid) | **Sheet Music**: [`extraordinary_sheet_music.png`](extraordinary_sheet_music.png)
 - **Created With**: **Gemini 4 Argon high in Antigravity CLI**
 - **Key**: **C Natural Minor** (`C, D, Eb, F, G, Ab, Bb`) with **C Dorian** (`A` natural on the `F` major IV chord) & **G Dominant** (`Gm/G5` at the climax)
 - **Meter**: **4/4** on a pure rational 16th-note grid (`0` = Beat 1, `4` = Beat 2, `8` = Beat 3, `12` = Beat 4; `~` denotes an upward rolled chord)
