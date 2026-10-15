@@ -61,14 +61,17 @@ compositional form, and piano performance:
 """
 
 from dataclasses import dataclass, field
+import multiprocessing as mp
 import os
+import re
 import subprocess
 import tempfile
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 import pretty_midi
 from scipy import signal
+from scipy.interpolate import PchipInterpolator
 import soundfile as sf
 
 
@@ -994,39 +997,183 @@ def compute_note_velocity(base_dyn: str, hand: str, step: float, pitch_idx: int,
     return max(30, min(115, int(round(v))))
 
 
-def compile_to_midi(measures: List[Measure], out_path: str) -> pretty_midi.PrettyMIDI:
+# Measure downbeat timestamps (in seconds) across all 116 bars of original_from_youtube.mp4
+BAR_BOUNDARIES: Tuple[float, ...] = (
+    0.81, 2.73, 4.72, 6.75, 8.81, 10.73, 12.76, 14.91,
+    17.11, 19.07, 21.00, 22.96, 24.89, 26.82, 28.75, 30.75,
+    32.72, 34.65, 36.62, 38.59, 40.53, 42.48, 44.42, 46.36,
+    48.00, 49.86, 51.72, 53.59, 55.69, 57.58, 59.40, 61.24,
+    63.15, 65.07, 66.98, 68.91, 70.82, 72.74, 74.68, 76.58,
+    78.46, 80.36, 82.34, 84.26, 86.25, 88.13, 90.10, 92.02,
+    93.88, 95.72, 97.61, 99.48, 101.44, 103.29, 105.19, 106.84,
+    108.59, 110.45, 112.28, 114.09, 115.89, 117.69, 119.47, 121.21,
+    122.99, 124.83, 126.68, 128.54, 130.44, 132.30, 134.11, 135.92,
+    137.69, 139.50, 141.32, 143.12, 144.91, 146.68, 148.50, 150.24,
+    152.05, 153.92, 155.77, 157.57, 159.40, 161.25, 163.11, 164.92,
+    166.73, 168.52, 170.33, 172.12, 173.90, 175.68, 177.54, 179.35,
+    181.14, 182.93, 184.74, 186.54, 188.35, 190.09, 191.92, 193.66, 195.47, 197.20,
+    199.08, 200.99, 202.85, 204.73, 206.78, 208.64, 210.61, 212.52, 214.93, 217.51, 225.20,
+)
+ENDCARD_OFFSET_SEC: float = 171.370
+
+
+def build_dynamic_time_map(
+    measures: List[Measure],
+    video_path: str = "original_from_youtube.mp4",
+) -> Tuple[PchipInterpolator, PchipInterpolator]:
     """
-    Single-mode Virtual Pianist MIDI compiler:
-      - Integrates the section tempo curve BPM(m) with phrase-arch agogic breathing
-        on cadence measures.
+    Construct a continuous, strictly monotonic C1-smooth dynamic rubato time-warp
+    spline t_of_g(g) (and its inverse g_of_t(t)) by aligning all 930 eighth-note
+    sub-bar grid positions across the 116 measures to the multi-band spectral
+    onset flux of `original_from_youtube.mp4` via Viterbi dynamic programming.
+    """
+    assert len(measures) == 116 and len(BAR_BOUNDARIES) == 117
+    assert os.path.isfile(video_path), f"Reference video missing: {video_path}"
+
+    sr = 22050
+    hop = 110  # 4.99 ms frame step
+    dt = hop / float(sr)
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-i", video_path,
+        "-vn", "-ac", "1", "-ar", str(sr),
+        "-f", "f32le", "-",
+    ]
+    raw = subprocess.check_output(cmd)
+    y = np.frombuffer(raw, dtype=np.float32)
+
+    n_fft = 1024
+    win = np.hanning(n_fft).astype(np.float32)
+    n_frames = (len(y) - n_fft) // hop
+    frames = np.lib.stride_tricks.sliding_window_view(y, n_fft)[::hop][:n_frames] * win
+    spec = np.abs(np.fft.rfft(frames, axis=1))
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    bass_bins = (freqs >= 50.0) & (freqs < 350.0)
+    treb_bins = (freqs >= 350.0) & (freqs <= 4200.0)
+
+    log_spec = np.log1p(10.0 * spec)
+    diff = np.maximum(0.0, log_spec[1:] - log_spec[:-1])
+    flux_lh = np.concatenate([[0.0], diff[:, bass_bins].mean(axis=1)])
+    flux_rh = np.concatenate([[0.0], diff[:, treb_bins].mean(axis=1)])
+    kern = np.exp(-0.5 * (np.arange(-5, 6) / 1.8) ** 2)
+    kern /= kern.sum()
+    flux_lh = np.convolve(flux_lh, kern, mode="same")
+    flux_rh = np.convolve(flux_rh, kern, mode="same")
+
+    anchor_g: List[float] = [-2.0, 0.0]
+    anchor_t: List[float] = [max(0.05, BAR_BOUNDARIES[0] - 0.24), BAR_BOUNDARIES[0]]
+
+    for b_idx, m in enumerate(measures):
+        t0, t1 = BAR_BOUNDARIES[b_idx], BAR_BOUNDARIES[b_idx + 1]
+        dur = t1 - t0
+        max_shift = min(0.14, dur * 0.08)
+        grid_shifts = np.arange(-max_shift, max_shift + 1e-6, dt)
+        n_states = len(grid_shifts)
+        dp = np.zeros((7, n_states), dtype=np.float64)
+        back = np.zeros((7, n_states), dtype=np.int32)
+
+        w_lh = np.zeros(7, dtype=np.float64)
+        w_rh = np.zeros(7, dtype=np.float64)
+        for ev in m.lh:
+            idx = int(round(ev.step / 2.0)) - 1
+            if 0 <= idx < 7 and abs(ev.step - 2.0 * (idx + 1)) < 0.3:
+                w_lh[idx] += len(ev.pitches)
+        for ev in m.rh:
+            idx = int(round(ev.step / 2.0)) - 1
+            if 0 <= idx < 7 and abs(ev.step - 2.0 * (idx + 1)) < 0.3:
+                w_rh[idx] += len(ev.pitches)
+
+        i0, i1 = int(t0 / dt), int(t1 / dt)
+        scale_lh = max(1e-4, float(np.percentile(flux_lh[i0:i1 + 1], 90)))
+        scale_rh = max(1e-4, float(np.percentile(flux_rh[i0:i1 + 1], 90)))
+
+        for s in range(7):
+            t_nom = t0 + dur * ((s + 1) / 8.0)
+            t_cand = t_nom + grid_shifts
+            f_idx = np.clip(np.round(t_cand / dt).astype(int), 0, len(flux_lh) - 1)
+            reward = np.zeros(n_states, dtype=np.float64)
+            if w_lh[s] > 0 or w_rh[s] > 0:
+                reward = (
+                    w_lh[s] * (flux_lh[f_idx] / scale_lh)
+                    + 1.3 * w_rh[s] * (flux_rh[f_idx] / scale_rh)
+                ) / (w_lh[s] + 1.3 * w_rh[s])
+            prior = -12.0 * (grid_shifts / dur) ** 2
+            if s == 0:
+                elast = -45.0 * (grid_shifts / (dur / 8.0)) ** 2
+                dp[s] = reward + prior + elast
+            else:
+                for m_cur in range(n_states):
+                    diff_s = grid_shifts[m_cur] - grid_shifts
+                    elast = -45.0 * (diff_s / (dur / 8.0)) ** 2
+                    end_tie = -45.0 * (grid_shifts[m_cur] / (dur / 8.0)) ** 2 if s == 6 else 0.0
+                    scores_prev = dp[s - 1] + elast
+                    best_prev = int(np.argmax(scores_prev))
+                    dp[s, m_cur] = scores_prev[best_prev] + reward[m_cur] + prior[m_cur] + end_tie
+                    back[s, m_cur] = best_prev
+
+        best_path = np.zeros(7, dtype=np.int32)
+        best_path[6] = int(np.argmax(dp[6]))
+        for s in range(5, -1, -1):
+            best_path[s] = back[s + 1, best_path[s + 1]]
+
+        for s in range(7):
+            sh = float(grid_shifts[best_path[s]])
+            anchor_g.append(b_idx * 16.0 + 2.0 * (s + 1))
+            anchor_t.append(t0 + dur * ((s + 1) / 8.0) + sh)
+        anchor_g.append((b_idx + 1) * 16.0)
+        anchor_t.append(t1)
+
+    # Extend past bar 116 for final chord ring-out
+    anchor_g.append(116 * 16.0 + 32.0)
+    anchor_t.append(BAR_BOUNDARIES[-1] + 6.50)
+
+    g_arr = np.array(anchor_g, dtype=np.float64)
+    t_arr = np.array(anchor_t, dtype=np.float64)
+    assert np.all(np.diff(g_arr) > 0.0) and np.all(np.diff(t_arr) > 0.02), "Non-monotonic time map"
+    return PchipInterpolator(g_arr, t_arr), PchipInterpolator(t_arr, g_arr)
+
+
+def compile_to_midi(
+    measures: List[Measure],
+    out_path: str,
+    t_of_g: Optional[PchipInterpolator] = None,
+) -> pretty_midi.PrettyMIDI:
+    """
+    Single-mode Virtual Pianist MIDI compiler with continuous dynamic rubato
+    synchronization (`t_of_g`):
+      - Maps every note onset, offset, and sustain pedal event through the
+        930-knot C1 PCHIP rubato spline so the synthesized performance locks
+        continuously to Ru's hands in `original_from_youtube.mp4`.
       - Voices chords with natural bottom-to-top micro-spread (4.5 ms on block
         chords/octaves, 20 ms on lyrical Roll chords).
       - Applies legatissimo finger-overlap on 32nd-note ornamental cascades (`T`)
         and syncopated legato sustain pedaling (CC64).
     """
     validate_score(measures)
+    if t_of_g is None:
+        t_of_g, _ = build_dynamic_time_map(measures)
+
     pm = pretty_midi.PrettyMIDI(initial_tempo=measures[0].bpm)
     piano = pretty_midi.Instrument(program=0, name="Concert Grand Piano (First-Principles Reduction)")
+    # Anchor MIDI tick 0 at t = 0.000s so FluidSynth sample 0 matches video t = 0.000s
+    piano.control_changes.append(pretty_midi.ControlChange(64, 0, 0.0))
 
-    t_cursor = 0.60  # Concert-hall pre-roll before Bar 1
-
-    for m in measures:
-        # Subtle phrase-end agogic broadening (+4% on cadence bars)
-        agogic_factor = 1.04 if m.bar_num in PHRASE_CADENCE_BARS else 1.00
-        bar_dur = (240.0 / m.bpm) * agogic_factor
-        step_dur = bar_dur / W
+    for b_idx, m in enumerate(measures):
+        g_bar = b_idx * float(W)
 
         # Syncopated legato sustain pedal (release 35 ms before change, catch 15 ms after)
         for p_step in m.pedal_steps:
-            t_ped = max(0.05, t_cursor + p_step * step_dur)
-            piano.control_changes.append(pretty_midi.ControlChange(64, 0, max(0.0, t_ped - 0.035)))
+            t_ped = max(0.05, float(t_of_g(g_bar + p_step)))
+            piano.control_changes.append(pretty_midi.ControlChange(64, 0, max(0.005, t_ped - 0.035)))
             piano.control_changes.append(pretty_midi.ControlChange(64, 110, t_ped + 0.015))
 
         for hand_label, ev_list in (("lh", m.lh), ("rh", m.rh)):
             for ev in ev_list:
-                t_on_base = max(0.0, t_cursor + ev.step * step_dur)
+                g_on = g_bar + ev.step
                 gate = 1.45 if ev.duration == T else 0.98
-                t_off = t_on_base + (ev.duration * gate) * step_dur
+                g_off = g_on + ev.duration * gate
+                t_on_base = max(0.01, float(t_of_g(g_on)))
+                t_off = max(t_on_base + 0.06, float(t_of_g(g_off)))
                 n_p = len(ev.pitches)
                 spread_sec = 0.020 if ev.rolled else (0.0045 if n_p > 1 else 0.0)
                 for idx, p in enumerate(sorted(ev.pitches)):
@@ -1039,10 +1186,9 @@ def compile_to_midi(measures: List[Measure], out_path: str) -> pretty_midi.Prett
                         end=max(t_on_base + voice_offset + 0.05, t_off),
                     ))
 
-        t_cursor += bar_dur
-
     # Release pedal cleanly after final chord resonance
-    piano.control_changes.append(pretty_midi.ControlChange(64, 0, t_cursor + 1.50))
+    t_final_end = float(t_of_g(len(measures) * float(W)))
+    piano.control_changes.append(pretty_midi.ControlChange(64, 0, t_final_end + 2.50))
 
     # Clean overlapping identical-pitch notes for crisp hammer re-articulation
     piano.notes.sort(key=lambda x: (x.pitch, x.start))
@@ -1057,6 +1203,7 @@ def compile_to_midi(measures: List[Measure], out_path: str) -> pretty_midi.Prett
     pm.write(out_path)
     assert os.path.isfile(out_path) and os.path.getsize(out_path) > 1000, f"MIDI write failed: {out_path}"
     return pm
+
 
 
 # =============================================================================
@@ -1215,11 +1362,12 @@ def _build_concert_hall_ir(fs: int) -> Tuple[np.ndarray, np.ndarray]:
     return ir_l / norm, ir_r / norm
 
 
-def synthesize_and_master_audio(midi_path: str, out_mp3_path: str) -> None:
+def synthesize_and_master_audio(midi_path: str, out_mp3_path: str) -> np.ndarray:
     """
     Execute the complete 96 kHz / 64-bit float dual-soundfont synthesis,
     sympathetic string resonance, zero-phase mastering EQ, concert-hall FFT
     convolution, and 48 kHz LAME V0 encoding pipeline.
+    Returns the 48 kHz stereo float64 master array.
     """
     with tempfile.TemporaryDirectory(prefix="extraordinary_master_") as tmpdir:
         wav_ms = os.path.join(tmpdir, "stem_musescore_96k.wav")
@@ -1308,6 +1456,8 @@ def synthesize_and_master_audio(midi_path: str, out_mp3_path: str) -> None:
     assert os.path.isfile(out_mp3_path), f"MP3 output missing: {out_mp3_path}"
     mp3_size = os.path.getsize(out_mp3_path)
     assert 2_000_000 <= mp3_size <= 10_000_000, f"Unexpected MP3 size: {mp3_size} bytes"
+    return master_48k
+
 
 
 # =============================================================================
@@ -1799,14 +1949,30 @@ lower = {{
     return ly_doc
 
 
-def export_sheet_music_png(measures: List[Measure], out_png_path: str) -> None:
+def export_sheet_music_png(
+    measures: List[Measure],
+    out_png_path: str,
+) -> Tuple[List[Tuple], List[Tuple[float, float]], np.ndarray]:
     """
     Compile the symbolic score to GNU LilyPond vector PDF on a single continuous
-    tall page, rasterize at supersampled 400 DPI via Poppler `pdftoppm`, and
-    downsample with Lanczos-3 anti-aliasing to a crisp 2400px-wide tall PNG.
+    tall page, extract exact sub-pixel bounding boxes for all 2,228 noteheads
+    across Bars 1-116, rasterize at supersampled 400 DPI via Poppler `pdftoppm`,
+    and downsample with Lanczos-3 anti-aliasing to a crisp 2400px-wide tall PNG.
     """
     Image.MAX_IMAGE_PIXELS = None
     ly_source = build_lilypond_source(measures)
+    ly_lines = ly_source.splitlines()
+
+    line_meta: Dict[int, Tuple[int, str]] = {}
+    cur_hand = None
+    for idx, ln in enumerate(ly_lines, 1):
+        if ln.startswith("upper ="):
+            cur_hand = "rh"
+        elif ln.startswith("lower ="):
+            cur_hand = "lh"
+        m = re.match(r"\s*%\s*Bar\s+(\d+)", ln)
+        if m and cur_hand is not None:
+            line_meta[idx + 1] = (int(m.group(1)), cur_hand)
 
     with tempfile.TemporaryDirectory(prefix="extraordinary_sheet_") as tmpdir:
         ly_path = os.path.join(tmpdir, "extraordinary_score.ly")
@@ -1819,12 +1985,21 @@ def export_sheet_music_png(measures: List[Measure], out_png_path: str) -> None:
             f.write(ly_source)
 
         subprocess.run(
-            ["lilypond", "--pdf", "-dno-point-and-click", "-o", pdf_prefix, ly_path],
+            ["lilypond", "--pdf", "-o", pdf_prefix, ly_path],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         assert os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 10_000, "LilyPond PDF generation failed"
+
+        raw_pdf = open(pdf_path, "rb").read()
+        mb = re.search(rb"/MediaBox\s*\[\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*\]", raw_pdf)
+        assert mb is not None, "Missing MediaBox in LilyPond PDF"
+        w_pt, h_pt = float(mb.group(3)), float(mb.group(4))
+        objs = re.findall(
+            rb"/Rect\s*\[\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*\]\s*/Border\s*\[0 0 0\]\s*/A<</URI\(textedit://[^:]+:(\d+):(\d+):(\d+)\)",
+            raw_pdf,
+        )
 
         # Rasterize vector PDF at supersampled 400 DPI
         subprocess.run(
@@ -1844,18 +2019,767 @@ def export_sheet_music_png(measures: List[Measure], out_png_path: str) -> None:
             target_h = int(round(h_raw * (target_w / float(w_raw))))
             downsampled = img_rgb.resize((target_w, target_h), resample=Image.Resampling.LANCZOS)
             downsampled.save(out_png_path, format="PNG", optimize=True, compress_level=9)
+            sheet_gray = np.array(downsampled.convert("L"), dtype=np.float32)
 
     assert os.path.isfile(out_png_path) and os.path.getsize(out_png_path) > 500_000, f"PNG output invalid: {out_png_path}"
+
+    # Map notehead bounding boxes and 1080px portrait sheet music coordinates
+    x_crop0, x_crop1 = 68, 2332
+    scale = 1080.0 / (x_crop1 - x_crop0)
+    h_sc = int(round(target_h * scale))
+    sheet_1080_gray = np.array(
+        Image.fromarray(sheet_gray.astype(np.uint8))
+        .crop((x_crop0, 0, x_crop1, target_h))
+        .resize((1080, h_sc), Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    ) / 255.0
+
+
+    by_bar_hand: Dict[Tuple[int, str], List[Tuple]] = {}
+    for x0, y0, x1, y1, lnum, c0, _ in objs:
+        ln = int(lnum)
+        c_i = int(c0)
+        if ln in line_meta:
+            line_s = ly_lines[ln - 1]
+            if line_s[:c_i].count('"') % 2 == 0 and line_s[c_i] in "abcdefg" and (c_i == 0 or line_s[c_i - 1] in " <"):
+                bnum, hand = line_meta[ln]
+                px0 = (float(x0) / w_pt * target_w - x_crop0) * scale
+                px1 = (float(x1) / w_pt * target_w - x_crop0) * scale
+                py0 = (1.0 - float(y1) / h_pt) * target_h * scale
+                py1 = (1.0 - float(y0) / h_pt) * target_h * scale
+                by_bar_hand.setdefault((bnum, hand), []).append(
+                    (c_i, 0.5 * (px0 + px1), 0.5 * (py0 + py1), px0, py0, px1, py1)
+                )
+
+    rh_bars, lh_bars, _, _ = _split_cross_barline_ties(measures)
+    dur_map = {tok: ticks for ticks, tok in LY_DUR_TABLE}
+    all_nhs: List[Tuple] = []
+    for bnum in range(1, 117):
+        for hand, bars_list in (("rh", rh_bars), ("lh", lh_bars)):
+            evs = sorted(bars_list[bnum - 1], key=lambda e: e.step)
+            if hand == "lh":
+                ped = [e for e in evs if e.step == B1 and e.duration == W]
+                upp = [e for e in evs if not (e.step == B1 and e.duration == W)]
+                if ped and upp:
+                    evs = upp + ped
+            raw_nhs = sorted(by_bar_hand.get((bnum, hand), []), key=lambda x: x[0])
+            ptr = 0
+            for ev in evs:
+                t_s = int(round(ev.step * 2))
+                t_e = t_s + int(round(ev.duration * 2))
+                ch_toks = _span_to_ly_chunks(t_s, t_e)
+                cur_t = t_s
+                pitches = sorted(set(ev.pitches))
+                g_ev_s = (bnum - 1) * 16.0 + ev.step
+                g_ev_e = (bnum - 1) * 16.0 + ev.step + ev.duration
+                for tok in ch_toks:
+                    dt_tok = dur_map[tok]
+                    g_ch_s = (bnum - 1) * 16.0 + cur_t / 2.0
+                    g_ch_e = (bnum - 1) * 16.0 + (cur_t + dt_tok) / 2.0
+                    for p in pitches:
+                        _, xc, yc, x0, y0, x1, y1 = raw_nhs[ptr]
+                        all_nhs.append((bnum, hand, g_ev_s, g_ev_e, g_ch_s, g_ch_e, p, xc, yc, x0, y0, x1, y1))
+                        ptr += 1
+                    cur_t += dt_tok
+            assert ptr == len(raw_nhs), f"Notehead bijection mismatch at bar {bnum} {hand}: {ptr} != {len(raw_nhs)}"
+
+    sys_bounds: List[Tuple[float, float]] = []
+    for s_idx in range(29):
+        b_s, b_e = s_idx * 4 + 1, (s_idx + 1) * 4
+        ys0 = [n[10] for n in all_nhs if b_s <= n[0] <= b_e]
+        ys1 = [n[12] for n in all_nhs if b_s <= n[0] <= b_e]
+        sys_bounds.append((min(ys0) - 18.0, max(ys1) + 18.0))
+
+    return all_nhs, sys_bounds, sheet_1080_gray
+
+
+# =============================================================================
+# 10. PORTRAIT SHOWCASE VIDEO ENGINE (A/B SHOWMANSHIP AUDIO & BREEZE OF AIR)
+# =============================================================================
+
+_VID_CTX: Dict = {}
+
+
+def _k_weight_filter(stereo: np.ndarray, fs: int) -> np.ndarray:
+    """ITU-R BS.1770-4 K-weighting filter (1.5 kHz +4 dB high-shelf + 38 Hz RLB high-pass)."""
+    # Stage 1: High-shelf (+4 dB above 1500 Hz)
+    f0 = 1681.974450955533
+    g = 3.999843853973347
+    q = 0.7071752369554196
+    k = np.tan(np.pi * f0 / fs)
+    vh = 10.0 ** (g / 20.0)
+    vb = vh ** 0.4996667741545416
+    a0 = 1.0 + k / q + k * k
+    b0 = (vh + vb * k / q + k * k) / a0
+    b1 = 2.0 * (k * k - vh) / a0
+    b2 = (vh - vb * k / q + k * k) / a0
+    a1 = 2.0 * (k * k - 1.0) / a0
+    a2 = (1.0 - k / q + k * k) / a0
+    sos_shelf = np.array([[b0, b1, b2, 1.0, a1, a2]], dtype=np.float64)
+    sos_hp = signal.butter(2, 38.0, btype="high", fs=fs, output="sos")
+    sos_k = np.vstack([sos_shelf, sos_hp])
+    return signal.sosfilt(sos_k, stereo, axis=0)
+
+
+def _our_audio_weight_at_time(t: float) -> float:
+    """
+    Compute the smooth Showmanship A/B audio weight w(t) in [0.0, 1.0]
+    (0.0 = Ru's Original Piano, 1.0 = Our 398-Byte First-Principles Render).
+    Switches every 4 bars (1 system) with a 0.35s equal-power cosine crossfade
+    centered 0.08s before the barline downbeat so every 8-bar section is heard
+    as a 4-bar Call (Ru) + 4-bar Answer (Ours).
+    """
+    fade_half = 0.175
+    if t < 232.50:
+        # Build switch timestamps at 4-bar system boundaries
+        # Systems 0..27 alternate every 4 bars; System 28 (Bars 113-116) splits
+        # into Bars 113-114 (Ru) and Bars 115-116 (Ours) for the final cadence!
+        sw_times = [BAR_BOUNDARIES[4 * s] - 0.08 for s in range(1, 29)] + [BAR_BOUNDARIES[114] - 0.08]
+    else:
+        # End-Card Replay (233.89s - 257.63s, replaying Bars 33-44 shifted by +171.370s)
+        sw_times = [
+            BAR_BOUNDARIES[36] + ENDCARD_OFFSET_SEC - 0.08,  # Bar 37 -> Ours
+            BAR_BOUNDARIES[40] + ENDCARD_OFFSET_SEC - 0.08,  # Bar 41 -> Ru
+            BAR_BOUNDARIES[42] + ENDCARD_OFFSET_SEC - 0.08,  # Bar 43 -> Ours
+        ]
+
+    state = 0.0
+    for t_sw in sw_times:
+        target = 1.0 - state
+        if t <= t_sw - fade_half:
+            break
+        elif t < t_sw + fade_half:
+            u = (t - (t_sw - fade_half)) / (2.0 * fade_half)
+            c = 0.5 - 0.5 * np.cos(np.pi * u)
+            return float(state * (1.0 - c) + target * c)
+        else:
+            state = target
+    return float(state)
+
+
+def _blur_premultiplied(rgba_img: Image.Image, radius: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Gaussian blur in premultiplied-alpha space (zero dark/grey blur halo)."""
+    arr = np.array(rgba_img, dtype=np.float32)
+    a = arr[:, :, 3:4] / 255.0
+    rgb_p = arr[:, :, :3] * a
+    p_u8 = np.clip(np.concatenate([rgb_p, arr[:, :, 3:4]], axis=2), 0, 255).astype(np.uint8)
+    blurred = np.array(
+        Image.fromarray(p_u8, mode="RGBA").filter(ImageFilter.GaussianBlur(radius=radius)),
+        dtype=np.float32,
+    )
+    return blurred[:, :, :3], blurred[:, :, 3:4] / 255.0
+
+
+def _render_video_frame_worker(frame_idx: int) -> Tuple[int, bytes]:
+    """
+    Render the 1080x1312 (Studio HUD 144px + Sheet Music 1168px) bottom RGB24
+    frame for `frame_idx` using active-strip premultiplied-alpha Breeze of Air.
+    """
+    ctx = _VID_CTX
+    t = frame_idx * (1001.0 / 30000.0)
+    our_weight = float(ctx["w_frames"][frame_idx])
+    env_val = float(ctx["env_frames"][frame_idx])
+    g_cur = float(ctx["g_frames"][frame_idx])
+    bpm_live = int(round(float(ctx["bpm_frames"][frame_idx])))
+
+    b_idx = min(115, max(0, int(max(0.0, g_cur) // 16.0)))
+    s_idx = b_idx // 4
+    H_BOT = 1168
+    h_sc = ctx["h_sc"]
+    sys_y_tops = ctx["sys_y_tops"]
+
+    # Calm, non-nauseating page scroll: 100% stationary during each 4-bar system,
+    # easing smoothly over the final 2.4 sixteenth-notes (~0.45s) of every 4th bar.
+    g_sys_end = (s_idx + 1) * 16.0 * 4.0
+    rem_g = g_sys_end - g_cur
+    if s_idx < 28 and 0.0 <= rem_g < 2.4 and not (232.0 <= t < 234.2):
+        u_sc = (2.4 - rem_g) / 2.4
+        ease = 0.5 - 0.5 * np.cos(np.pi * np.clip(u_sc, 0.0, 1.0))
+        y_top = int(round((1.0 - ease) * sys_y_tops[s_idx] + ease * sys_y_tops[s_idx + 1]))
+        is_stationary = (y_top == sys_y_tops[s_idx])
+    else:
+        y_top = sys_y_tops[s_idx]
+        is_stationary = True
+
+    sy0_g, sy1_g = ctx["sys_bounds"][s_idx]
+    sy0 = max(0, int(sy0_g - y_top - 26))
+    sy1 = min(H_BOT, int(sy1_g - y_top + 20))
+    strip_y0 = max(0, sy0 - 28)
+    strip_y1 = min(H_BOT, sy1 + 28)
+    h_strip = strip_y1 - strip_y0
+
+    if is_stationary:
+        final_sheet = ctx["stat_sheets"][s_idx].copy()
+        paper_strip = ctx["stat_paper_strips"][s_idx].copy()
+        ink_strip = ctx["stat_ink_strips"][s_idx]
+    else:
+        ink_full = ctx["sheet_1080_gray"][y_top:y_top + H_BOT].copy()
+        # Top/bottom 28px margin fade (10px pure ivory + 18px ramp) so no clipped ledger line touches the border
+        ink_full[:10] = 1.0
+        ink_full[10:28] = 1.0 - (1.0 - ink_full[10:28]) * np.linspace(0.0, 1.0, 18, dtype=np.float32)[:, None]
+        ink_full[-10:] = 1.0
+        ink_full[-28:-10] = 1.0 - (1.0 - ink_full[-28:-10]) * np.linspace(1.0, 0.0, 18, dtype=np.float32)[:, None]
+        yy = np.arange(H_BOT, dtype=np.float32)[:, None]
+        dist_sys = np.maximum(0.0, np.maximum(sy0 - yy, yy - sy1))
+        focus = (0.94 + 0.075 * np.exp(-(dist_sys / 28.0) ** 2))[:, 0]
+        paper_full = np.empty((H_BOT, 1080, 3), dtype=np.float32)
+        paper_full[:, :, 0] = np.clip(250.0 * focus[:, None], 0, 255)
+        paper_full[:, :, 1] = np.clip(246.0 * focus[:, None], 0, 255)
+        paper_full[:, :, 2] = np.clip(238.0 * focus[:, None], 0, 255)
+        final_sheet = (paper_full * ink_full[:, :, None]).astype(np.uint8)
+        paper_strip = paper_full[strip_y0:strip_y1]
+        ink_strip = ink_full[strip_y0:strip_y1]
+
+    # Smooth palette interpolation between Ru (Orchid-Amethyst) and Ours (Imperial Jade)
+    w = our_weight
+    c_primary_rh = (
+        int(round((1.0 - w) * 168 + w * 16)),
+        int(round((1.0 - w) * 85 + w * 185)),
+        int(round((1.0 - w) * 247 + w * 129)),
+    )
+    c_sec_rh = (
+        int(round((1.0 - w) * 236 + w * 52)),
+        int(round((1.0 - w) * 72 + w * 211)),
+        int(round((1.0 - w) * 153 + w * 153)),
+    )
+    c_gold_rh = (245, 158, 11)
+    c_ring_rh = (
+        int(round((1.0 - w) * 126 + w * 4)),
+        int(round((1.0 - w) * 34 + w * 120)),
+        int(round((1.0 - w) * 206 + w * 87)),
+    )
+    c_primary_lh = (14, 165, 233)
+    c_sec_lh = (56, 189, 248)
+    c_ring_lh = (3, 105, 161)
+
+    if h_strip > 16:
+        ov_atmo_half = Image.new("RGBA", (540, max(8, h_strip // 2)), (0, 0, 0, 0))
+        ov_mid = Image.new("RGBA", (1080, h_strip), (0, 0, 0, 0))
+        ov_crisp = Image.new("RGBA", (1080, h_strip), (0, 0, 0, 0))
+        j_img = Image.new("RGBA", (1080, h_strip), (0, 0, 0, 0))
+        dr_atmo = ImageDraw.Draw(ov_atmo_half)
+        dr_mid = ImageDraw.Draw(ov_mid)
+        dr_crisp = ImageDraw.Draw(ov_crisp)
+        j_draw = ImageDraw.Draw(j_img)
+
+        sys_nhs = ctx["sys_nhs"][s_idx]
+        y_off = y_top + strip_y0
+        x_playhead = None
+
+        for hand, pal in (
+            ("lh", (c_primary_lh, c_sec_lh, (125, 211, 252))),
+            ("rh", (c_primary_rh, c_sec_rh, c_gold_rh)),
+        ):
+            traj = ctx["sys_traj"][(s_idx, hand)]
+            if traj is None:
+                continue
+            pts_g, pts_x, pts_y_global = traj
+            pts_y = pts_y_global - y_off
+
+            x_cur_h = float(np.interp(g_cur, pts_g, pts_x))
+            if hand == "rh" or x_playhead is None:
+                x_playhead = x_cur_h
+
+            g_grid = np.linspace(max(pts_g[0], g_cur - 22.0), min(pts_g[-1], g_cur + 4.0), 140)
+            xg = np.interp(g_grid, pts_g, pts_x)
+            yg = np.interp(g_grid, pts_g, pts_y)
+            kern = ctx["smooth_kern"]
+            yg_s = np.convolve(np.pad(yg, 7, mode="edge"), kern, mode="valid")
+
+            for i in range(len(g_grid) - 1):
+                dg = g_grid[i] - g_cur
+                u = (
+                    (np.clip(1.0 + dg / 22.0, 0.0, 1.0) ** 1.3)
+                    if dg <= 0
+                    else ((np.clip(1.0 - dg / 4.0, 0.0, 1.0) ** 1.8) * 0.45)
+                )
+                if u > 0.02:
+                    dr_atmo.line(
+                        [xg[i] * 0.5, yg_s[i] * 0.5, xg[i + 1] * 0.5, yg_s[i + 1] * 0.5],
+                        fill=(*pal[0], int(115 * u)),
+                        width=int(max(3, 13 * u)),
+                    )
+
+            for s_i, rgb in enumerate(pal):
+                phase = (g_grid - g_cur) * (0.60 + 0.22 * s_i) - g_cur * 1.8 + s_i * 2.1
+                yw = yg_s + np.sin(phase) * (3.5 + 3.2 * s_i) + np.cos(phase * 0.5) * 1.8
+                for i in range(len(g_grid) - 1):
+                    dg = g_grid[i] - g_cur
+                    u = (
+                        (np.clip(1.0 + dg / 22.0, 0.0, 1.0) ** 1.4)
+                        if dg <= 0
+                        else ((np.clip(1.0 - dg / 4.0, 0.0, 1.0) ** 1.8) * 0.5)
+                    )
+                    if u > 0.03:
+                        dr_mid.line(
+                            [xg[i], yw[i], xg[i + 1], yw[i + 1]],
+                            fill=(*rgb, int(165 * u)),
+                            width=int(max(2, (6 if s_i == 0 else 4) * u)),
+                        )
+                        dr_crisp.line(
+                            [xg[i], yw[i], xg[i + 1], yw[i + 1]],
+                            fill=(*rgb, int(210 * u)),
+                            width=int(max(1, 2 * u)),
+                        )
+
+        if x_playhead is not None:
+            cs_y0 = max(4, sy0 - strip_y0 + 18)
+            cs_y1 = min(h_strip - 4, sy1 - strip_y0 - 12)
+            dr_atmo.rectangle(
+                [(x_playhead - 24) * 0.5, cs_y0 * 0.5, (x_playhead + 6) * 0.5, cs_y1 * 0.5],
+                fill=(*c_primary_rh, 55),
+            )
+            dr_mid.line([x_playhead, cs_y0 - 4, x_playhead, cs_y1 + 2], fill=(*c_primary_rh, 175), width=4)
+            dr_crisp.line([x_playhead, cs_y0 - 4, x_playhead, cs_y1 + 2], fill=(*c_gold_rh, 220), width=2)
+
+        active_by_hand: Dict[str, List[Tuple]] = {"rh": [], "lh": []}
+        for n in sys_nhs:
+            bnum, hand, g_ev_s, g_ev_e, g_ch_s, g_ch_e, p, xc, yc, x0, y0, x1, y1 = n
+            if g_ev_s <= g_cur < g_ev_e and (g_ch_s <= g_cur < g_ch_e or g_ch_s == g_ev_s):
+                active_by_hand[hand].append(n)
+
+        for hand, notes_h in active_by_hand.items():
+            if not notes_h:
+                continue
+            col_glow = c_gold_rh if hand == "rh" else c_primary_lh
+            col_ring = c_ring_rh if hand == "rh" else c_ring_lh
+            if len(notes_h) > 1:
+                xm = float(np.mean([n[7] for n in notes_h]))
+                ymin_h = min(n[8] for n in notes_h) - y_off
+                ymax_h = max(n[8] for n in notes_h) - y_off
+                dr_mid.line([xm, ymin_h, xm, ymax_h], fill=(*col_glow, 190), width=8)
+                dr_crisp.line([xm, ymin_h, xm, ymax_h], fill=(*col_ring, 230), width=2)
+            for bnum, h, g_ev_s, g_ev_e, g_ch_s, g_ch_e, p, xc, yc, x0, y0, x1, y1 in notes_h:
+                ly0, ly1 = y0 - y_off, y1 - y_off
+                age = max(0.0, g_cur - g_ev_s)
+                pulse = 0.80 + 0.20 * np.exp(-age / 1.5)
+                pad_a = 11.0 * pulse
+                pad_m = 6.5 * pulse
+                dr_atmo.ellipse(
+                    [(x0 - pad_a) * 0.5, (ly0 - pad_a) * 0.5, (x1 + pad_a) * 0.5, (ly1 + pad_a) * 0.5],
+                    fill=(*col_glow, int(140 * pulse)),
+                )
+                dr_mid.ellipse([x0 - pad_m, ly0 - pad_m, x1 + pad_m, ly1 + pad_m], fill=(*col_glow, int(230 * pulse)))
+                dr_crisp.ellipse([x0 - 2.5, ly0 - 2.5, x1 + 2.5, ly1 + 2.5], outline=(*col_ring, 255), width=2)
+                j_draw.ellipse([x0, ly0, x1, ly1], fill=(*col_glow, 90))
+
+        for bnum, hand, g_ev_s, g_ev_e, g_ch_s, g_ch_e, p, xc, yc, x0, y0, x1, y1 in sys_nhs:
+            age_g = g_cur - g_ch_s
+            if 0.0 < age_g < 15.0:
+                u_m = (1.0 - age_g / 15.0) ** 1.35
+                lyc = yc - y_off
+                for m_i in range(2):
+                    seed = bnum * 1000 + int(g_ch_s * 10) * 10 + p + m_i
+                    vx = 2.2 + (seed % 7) * 0.45
+                    vy = (0.8 + (seed % 5) * 0.35) * (-1.0 if hand == "rh" else 0.6)
+                    mx = xc - age_g * vx + np.cos(age_g * 0.9 + seed) * 4.0
+                    my = lyc + age_g * vy + np.sin(age_g * 1.2 + seed) * 3.5
+                    r = (1.8 + (seed % 3) * 0.7) * u_m
+                    mc = c_primary_rh if (m_i == 0 and hand == "rh") else (c_gold_rh if hand == "rh" else c_sec_lh)
+                    dr_mid.ellipse([mx - r * 2.2, my - r * 1.5, mx + r * 2.2, my + r * 1.5], fill=(*mc, int(185 * u_m)))
+                    dr_crisp.ellipse([mx - r * 1.1, my - r * 0.8, mx + r * 1.1, my + r * 0.8], fill=(*mc, int(240 * u_m)))
+
+        ov_atmo_full = ov_atmo_half.resize((1080, h_strip), Image.Resampling.BILINEAR)
+        for img_ov, rad in ((ov_atmo_full, 5.5), (ov_mid, 3.8), (ov_crisp, 0.5)):
+            rgb_p, a_b = _blur_premultiplied(img_ov, rad)
+            paper_strip = paper_strip * (1.0 - a_b) + rgb_p
+
+        ink_3 = ink_strip[:, :, None]
+        ink_colored = paper_strip * ink_3
+        j_arr = np.array(j_img, dtype=np.float32)
+        ja = (j_arr[:, :, 3:4] / 255.0) * (1.0 - ink_3)
+        final_sheet[strip_y0:strip_y1] = np.clip(ink_colored + j_arr[:, :, :3] * ja, 0, 255).astype(np.uint8)
+    else:
+        active_by_hand = {"rh": [], "lh": []}
+
+    # Assemble 1080 x 1312 bottom frame (144px HUD + 1168px Sheet Music)
+    bot_img = Image.new("RGB", (1080, 1312), (10, 14, 25))
+    bot_img.paste(Image.fromarray(final_sheet), (0, 144))
+    cdraw = ImageDraw.Draw(bot_img)
+
+    cdraw.line([0, 0, 1080, 0], fill=c_primary_rh, width=3)
+    cdraw.line([0, 143, 1080, 143], fill=c_gold_rh, width=2)
+
+    # Showmanship A/B Switcher Pills (y=8..62 in HUD coords)
+    if our_weight < 0.5:
+        cdraw.rounded_rectangle([24, 8, 526, 62], radius=14, fill=(46, 16, 101), outline=(192, 132, 252), width=3)
+        cdraw.ellipse([46, 27, 62, 43], fill=(192, 132, 252))
+        cdraw.text((76, 22), "RU'S ORIGINAL PIANO (YouTube)", fill=(250, 245, 255), font=ctx["font_md"])
+        cdraw.rounded_rectangle([554, 8, 1056, 62], radius=14, fill=(17, 24, 39), outline=(55, 65, 81), width=2)
+        cdraw.text((590, 22), "398-BYTE FIRST-PRINCIPLES RENDER", fill=(107, 114, 128), font=ctx["font_md"])
+    else:
+        cdraw.rounded_rectangle([24, 8, 526, 62], radius=14, fill=(17, 24, 39), outline=(55, 65, 81), width=2)
+        cdraw.text((60, 22), "RU'S ORIGINAL PIANO (YouTube)", fill=(107, 114, 128), font=ctx["font_md"])
+        cdraw.rounded_rectangle([554, 8, 1056, 62], radius=14, fill=(6, 58, 46), outline=(52, 211, 153), width=3)
+        cdraw.ellipse([576, 27, 592, 43], fill=(52, 211, 153))
+        cdraw.text((606, 22), "398-BYTE FIRST-PRINCIPLES RENDER", fill=(236, 253, 245), font=ctx["font_md"])
+
+    # Dedicated Live Harmonic Breeze Wave Lane (y=68..94 in HUD coords)
+    xs_w = ctx["xs_w"]
+    env_w = ctx["env_w"] * (0.35 + 0.85 * env_val)
+    ys_w1 = 81.0 + np.sin(xs_w * 0.028 - t * 9.0) * 9.0 * env_w
+    ys_w2 = 81.0 + np.cos(xs_w * 0.042 - t * 12.0 + 1.2) * 5.8 * env_w
+    w_col1 = (192, 132, 252) if our_weight < 0.5 else (52, 211, 153)
+    w_col2 = (244, 114, 182) if our_weight < 0.5 else (251, 191, 36)
+    pts1 = list(zip(xs_w.tolist(), ys_w1.tolist()))
+    pts2 = list(zip(xs_w.tolist(), ys_w2.tolist()))
+    cdraw.line(pts2, fill=w_col2, width=1)
+    cdraw.line(pts1, fill=w_col1, width=2)
+
+    m = ctx["measures"][b_idx]
+    lh_p = "+".join(note_name(p) for p in sorted({n[6] for n in active_by_hand["lh"]})) or "—"
+    rh_p = "+".join(note_name(p) for p in sorted({n[6] for n in active_by_hand["rh"]})) or "—"
+    sec_lbl = m.section if t < 232.50 else f"Replay · {m.section}"
+    left_txt = f"Bar {m.bar_num} / 116  ·  {sec_lbl}"
+    chord_disp = m.chord_symbol if len(m.chord_symbol) > 13 else f"{m.chord_symbol} ({m.roman})"
+    mid_txt = f"{chord_disp}  ·  ♩={bpm_live}  ·  {m.dynamic}"
+    right_txt = f"LH: {lh_p}  |  RH: {rh_p}"
+    cdraw.text((24, 101), left_txt, fill=(248, 250, 252), font=ctx["font_lg"])
+    cdraw.text((545, 104), mid_txt, fill=(251, 191, 36), font=ctx["font_md"], anchor="ma")
+    cdraw.text((1056, 106), right_txt, fill=(56, 189, 248), font=ctx["font_sm"], anchor="ra")
+
+    badge_state = 1 if our_weight >= 0.5 else 0
+    return badge_state, bot_img.tobytes()
+
+
+def render_showcase_video(
+    measures: List[Measure],
+    t_of_g: PchipInterpolator,
+    g_of_t: PchipInterpolator,
+    master_48k: np.ndarray,
+    all_nhs: List[Tuple],
+    sys_bounds: List[Tuple[float, float]],
+    sheet_1080_gray: np.ndarray,
+    ref_video_path: str = "original_from_youtube.mp4",
+    out_mp3_path: str = "extraordinary.mp3",
+    out_video_path: str = "extraordinary_showcase.mp4",
+) -> None:
+    """
+    Render the full-length (257.63s, 7,721 frames @ 29.97 fps) mobile portrait
+    (1080x1920) showcase video `extraordinary_showcase.mp4`:
+      - Top (1080x608): Ru's 1080p YouTube video with top-right audio badge
+      - Middle (1080x144): Studio HUD, Showmanship A/B Switcher & Live Breeze Wave
+      - Bottom (1080x1168): Calm 5-system sheet music with Premultiplied-Alpha
+        Breeze of Air streamlines, spirit-motes, and jewel-ringed noteheads
+      - Audio: K-weighted loudness-normalized (-14.0 LUFS) Showmanship A/B
+        stereo master switching smoothly every 4 bars between Ru's Original
+        Piano and our 96 kHz First-Principles Render.
+    """
+    assert os.path.isfile(ref_video_path), f"Missing reference video: {ref_video_path}"
+
+    # 1. Decode Ru's 48 kHz stereo audio from original_from_youtube.mp4
+    cmd_aud = [
+        "ffmpeg", "-v", "error",
+        "-i", ref_video_path,
+        "-vn", "-ac", "2", "-ar", str(EXPORT_SR),
+        "-f", "f32le", "-",
+    ]
+    raw_ref = subprocess.check_output(cmd_aud)
+    ref_48k = np.frombuffer(raw_ref, dtype=np.float32).reshape(-1, 2).astype(np.float64)
+    n_total_samples = ref_48k.shape[0]
+
+    # 2. Construct full-timeline 48 kHz stereo track for our rendered piano (including End-Card Replay)
+    ours_full = np.zeros_like(ref_48k)
+    n_main = min(n_total_samples, master_48k.shape[0])
+    ours_full[:n_main] = master_48k[:n_main]
+
+    # Copy Bars 32(pickup)..44 into End-Card Replay [233.77s .. 257.38s] shifted by +171.370s
+    t_rep_src0 = float(t_of_g(31 * 16.0 + 11.0))
+    t_rep_src1 = float(t_of_g(44 * 16.0))
+    idx_src0 = int(round(t_rep_src0 * EXPORT_SR))
+    idx_src1 = min(master_48k.shape[0], int(round(t_rep_src1 * EXPORT_SR)))
+    idx_dst0 = int(round((t_rep_src0 + ENDCARD_OFFSET_SEC) * EXPORT_SR))
+    rep_len = min(idx_src1 - idx_src0, n_total_samples - idx_dst0)
+    if rep_len > 0:
+        rep_slice = master_48k[idx_src0:idx_src0 + rep_len].copy()
+        fi = min(rep_len, int(0.25 * EXPORT_SR))
+        fo = min(rep_len, int(1.80 * EXPORT_SR))
+        rep_slice[:fi] *= (0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, fi)))[:, None]
+        rep_slice[-fo:] *= (0.5 + 0.5 * np.cos(np.linspace(0.0, np.pi, fo)))[:, None]
+        ours_full[idx_dst0:idx_dst0 + rep_len] = rep_slice
+
+    # 3. K-weighted perceptual loudness normalization & smooth phrase-level contour matching
+    k_ref = _k_weight_filter(ref_48k, EXPORT_SR)
+    k_ours = _k_weight_filter(ours_full, EXPORT_SR)
+    act_s0, act_s1 = int(0.81 * EXPORT_SR), int(225.20 * EXPORT_SR)
+    ms_ref_act = float(np.mean(np.sum(k_ref[act_s0:act_s1] ** 2, axis=1)))
+    ms_ours_act = float(np.mean(np.sum(k_ours[act_s0:act_s1] ** 2, axis=1)))
+    global_gain = np.sqrt(ms_ref_act / max(1e-12, ms_ours_act))
+    ours_full *= global_gain
+    k_ours *= global_gain
+
+    # Smooth phrase-level K-weighted RMS contour matching (100 Hz envelope, 2.8s Gaussian window)
+    env_hop = EXPORT_SR // 100
+    n_env = n_total_samples // env_hop
+    e_ref = np.sqrt(np.mean(np.sum(k_ref[:n_env * env_hop].reshape(n_env, env_hop, 2) ** 2, axis=2), axis=1) + 1e-9)
+    e_ours = np.sqrt(np.mean(np.sum(k_ours[:n_env * env_hop].reshape(n_env, env_hop, 2) ** 2, axis=2), axis=1) + 1e-9)
+    win_g = np.exp(-0.5 * (np.arange(-420, 421) / 140.0) ** 2)
+    win_g /= win_g.sum()
+    e_ref_s = np.convolve(np.pad(e_ref, 420, mode="edge"), win_g, mode="valid")
+    e_ours_s = np.convolve(np.pad(e_ours, 420, mode="edge"), win_g, mode="valid")
+    ratio_env = np.where(e_ours_s > 2e-3, e_ref_s / np.maximum(e_ours_s, 1e-4), 1.0)
+    ratio_env = np.clip(ratio_env, 10.0 ** (-3.5 / 20.0), 10.0 ** (+3.5 / 20.0))
+    ratio_env = np.convolve(np.pad(ratio_env, 150, mode="edge"), win_g[:301] / win_g[:301].sum(), mode="valid")
+    t_samples = np.arange(n_total_samples, dtype=np.float64) / EXPORT_SR
+    t_env = np.arange(n_env, dtype=np.float64) * (env_hop / float(EXPORT_SR))
+    sample_trim = np.interp(t_samples, t_env, ratio_env)
+    ours_full *= sample_trim[:, None]
+
+    # 4. Build equal-power Showmanship A/B stereo master and normalize to -14.0 LUFS / -1.0 dBFS ceiling
+    w_env = np.array([_our_audio_weight_at_time(float(t_val)) for t_val in t_env], dtype=np.float64)
+    w_samples = np.interp(t_samples, t_env, w_env)
+    g_ru = np.cos(0.5 * np.pi * w_samples)[:, None]
+    g_our = np.sin(0.5 * np.pi * w_samples)[:, None]
+    ab_mix = g_ru * ref_48k + g_our * ours_full
+
+    # Normalize integrated active K-weighted loudness to -14.0 LUFS with -1.0 dBFS true-peak limiter
+    k_mix = _k_weight_filter(ab_mix[act_s0:act_s1], EXPORT_SR)
+    lufs_cur = -0.691 + 10.0 * np.log10(max(1e-12, float(np.mean(np.sum(k_mix ** 2, axis=1)))))
+    lufs_gain = 10.0 ** ((-14.0 - lufs_cur) / 20.0)
+    ab_mix *= lufs_gain
+    ours_full *= lufs_gain
+
+    ceiling = 10.0 ** (-1.0 / 20.0)
+    peak_mix = float(np.max(np.abs(ab_mix)))
+    if peak_mix > ceiling:
+        ab_mix = np.tanh((ab_mix / ceiling) * 1.05) / np.tanh(1.05) * ceiling
+    ab_mix = np.clip(ab_mix, -ceiling, ceiling)
+
+    # Also update extraordinary.mp3 so standalone MP3 matches the exact normalized loudness
+    with tempfile.TemporaryDirectory(prefix="extraordinary_vid_") as tmpdir:
+        wav_ours_norm = os.path.join(tmpdir, "ours_norm_48k.wav")
+        wav_ab_master = os.path.join(tmpdir, "showcase_ab_48k.wav")
+        ours_mp3_slice = np.clip(ours_full[:master_48k.shape[0]], -ceiling, ceiling)
+        sf.write(wav_ours_norm, ours_mp3_slice, EXPORT_SR, subtype="FLOAT")
+        subprocess.run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", wav_ours_norm,
+            "-c:a", "libmp3lame", "-q:a", "0", "-compression_level", "0",
+            "-ar", str(EXPORT_SR), out_mp3_path,
+        ], check=True)
+        sf.write(wav_ab_master, ab_mix, EXPORT_SR, subtype="FLOAT")
+
+        # 5. Precompute per-frame trajectories & 29 stationary sheet-music system canvases
+        probe = subprocess.check_output([
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-count_frames", "-show_entries", "stream=nb_read_frames",
+            "-of", "default=noprint_wrappers=1:nokey=1", ref_video_path,
+        ]).decode().strip()
+        n_frames = int(probe)
+        assert n_frames > 7000, f"Unexpected frame count in {ref_video_path}: {n_frames}"
+
+        t_frames = np.arange(n_frames, dtype=np.float64) * (1001.0 / 30000.0)
+        w_frames = np.array([_our_audio_weight_at_time(float(tf)) for tf in t_frames], dtype=np.float64)
+
+        # Real-time audio envelope for the HUD harmonic breeze waveform
+        env_raw = np.sqrt(np.mean(ab_mix[:n_env * env_hop].reshape(n_env, env_hop, 2) ** 2, axis=(1, 2)))
+        env_norm = np.clip(env_raw / max(1e-4, float(np.percentile(env_raw, 95))), 0.0, 1.2)
+        env_frames = np.interp(t_frames, t_env, env_norm)
+
+        # Map video frame timestamp t -> musical grid coordinate g(t) and instantaneous rubato BPM
+        dt_dg_spline = t_of_g.derivative(1)
+        g_frames = np.zeros(n_frames, dtype=np.float64)
+        bpm_frames = np.zeros(n_frames, dtype=np.float64)
+        for f_i, tf in enumerate(t_frames):
+            if tf < 232.50:
+                g_val = float(np.clip(g_of_t(np.clip(tf, 0.57, 226.50)), -2.0, 116 * 16.0 - 0.01))
+            else:
+                t_rep = np.clip(tf - ENDCARD_OFFSET_SEC, BAR_BOUNDARIES[32] - 0.40, BAR_BOUNDARIES[44] - 0.02)
+                g_val = float(np.clip(g_of_t(t_rep), 32 * 16.0 - 2.0, 44 * 16.0 - 0.01))
+            g_frames[f_i] = g_val
+            # Smooth instantaneous rubato BPM over a +/- 2 sixteenth-note local window
+            dt_local = float(np.mean(dt_dg_spline(np.linspace(max(-2.0, g_val - 2.0), min(1856.0, g_val + 2.0), 5))))
+            bpm_frames[f_i] = np.clip(15.0 / max(0.05, dt_local), 65.0, 175.0)
+
+        H_BOT = 1168
+        h_sc = sheet_1080_gray.shape[0]
+        sys_y_tops: List[int] = []
+        stat_sheets: List[np.ndarray] = []
+        stat_paper_strips: List[np.ndarray] = []
+        stat_ink_strips: List[np.ndarray] = []
+        sys_nhs: List[List[Tuple]] = []
+        sys_traj: Dict[Tuple[int, str], Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
+
+        for s_idx in range(29):
+            sy0_g, sy1_g = sys_bounds[s_idx]
+            sys_mid = 0.5 * (sy0_g + sy1_g)
+            y_top = int(round(np.clip(sys_mid - 335, 0, h_sc - H_BOT)))
+            sys_y_tops.append(y_top)
+
+            sy0 = max(0, int(sy0_g - y_top - 26))
+            sy1 = min(H_BOT, int(sy1_g - y_top + 20))
+            strip_y0 = max(0, sy0 - 28)
+            strip_y1 = min(H_BOT, sy1 + 28)
+
+            ink_full = sheet_1080_gray[y_top:y_top + H_BOT].copy()
+            ink_full[:10] = 1.0
+            ink_full[10:28] = 1.0 - (1.0 - ink_full[10:28]) * np.linspace(0.0, 1.0, 18, dtype=np.float32)[:, None]
+            ink_full[-10:] = 1.0
+            ink_full[-28:-10] = 1.0 - (1.0 - ink_full[-28:-10]) * np.linspace(1.0, 0.0, 18, dtype=np.float32)[:, None]
+
+            yy = np.arange(H_BOT, dtype=np.float32)[:, None]
+            dist_sys = np.maximum(0.0, np.maximum(sy0 - yy, yy - sy1))
+            focus = (0.94 + 0.075 * np.exp(-(dist_sys / 28.0) ** 2))[:, 0]
+            paper_full = np.empty((H_BOT, 1080, 3), dtype=np.float32)
+            paper_full[:, :, 0] = np.clip(250.0 * focus[:, None], 0, 255)
+            paper_full[:, :, 1] = np.clip(246.0 * focus[:, None], 0, 255)
+            paper_full[:, :, 2] = np.clip(238.0 * focus[:, None], 0, 255)
+
+            stat_sheets.append((paper_full * ink_full[:, :, None]).astype(np.uint8))
+            stat_paper_strips.append(paper_full[strip_y0:strip_y1].copy())
+            stat_ink_strips.append(ink_full[strip_y0:strip_y1].copy())
+
+            b_s, b_e = s_idx * 4 + 1, (s_idx + 1) * 4
+            s_notes = [n for n in all_nhs if b_s <= n[0] <= b_e]
+            sys_nhs.append(s_notes)
+
+            for hand in ("lh", "rh"):
+                h_nhs = [n for n in s_notes if n[1] == hand]
+                by_g: Dict[float, List[Tuple[float, float, int]]] = {}
+                for bnum, h, g_ev_s, g_ev_e, g_ch_s, g_ch_e, p, xc, yc, x0, y0, x1, y1 in h_nhs:
+                    by_g.setdefault(round(g_ch_s, 3), []).append((xc, yc, p))
+                if len(by_g) < 2:
+                    sys_traj[(s_idx, hand)] = None
+                else:
+                    sorted_gs = sorted(by_g.keys())
+                    pts_g = np.array(sorted_gs, dtype=np.float64)
+                    pts_x = np.array([np.mean([pt[0] for pt in by_g[g]]) for g in sorted_gs], dtype=np.float64)
+                    pts_y = np.array(
+                        [(max(pt[1] for pt in by_g[g]) if hand == "lh" else min(pt[1] for pt in by_g[g])) for g in sorted_gs],
+                        dtype=np.float64,
+                    )
+                    pts_g = np.append(pts_g, b_e * 16.0)
+                    pts_x = np.append(pts_x, min(1035.0, pts_x[-1] + 45.0))
+                    pts_y = np.append(pts_y, pts_y[-1])
+                    sys_traj[(s_idx, hand)] = (pts_g, pts_x, pts_y)
+
+        font_lg = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 21)
+        font_md = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 16)
+        font_sm = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 15)
+
+        # Pre-render the two top-right video overlay badges (Ru vs Ours) with alpha mask
+        badges = []
+        for is_ours in (0, 1):
+            b_img = Image.new("RGBA", (412, 46), (0, 0, 0, 0))
+            b_dr = ImageDraw.Draw(b_img)
+            b_col = (168, 85, 247, 255) if is_ours == 0 else (16, 185, 129, 255)
+            b_txt = "AUDIO: RU'S ORIGINAL PIANO" if is_ours == 0 else "AUDIO: 398-BYTE DOCKER RENDER"
+            b_dr.rounded_rectangle([0, 0, 411, 45], radius=22, fill=(10, 14, 25, 220), outline=b_col, width=2)
+            b_dr.ellipse([20, 15, 36, 31], fill=b_col)
+            b_dr.text((48, 11), b_txt, fill=(248, 250, 252, 255), font=font_md)
+            b_arr = np.array(b_img, dtype=np.float32)
+            badges.append((b_arr[:, :, :3], b_arr[:, :, 3:4] / 255.0))
+
+        smooth_kern = np.exp(-np.linspace(-2.0, 2.0, 15) ** 2)
+        smooth_kern /= smooth_kern.sum()
+        xs_w = np.linspace(24.0, 1056.0, 180)
+        env_w = np.sin((xs_w - 24.0) * np.pi / 1032.0)
+
+        _VID_CTX.clear()
+        _VID_CTX.update({
+            "measures": measures,
+            "w_frames": w_frames,
+            "env_frames": env_frames,
+            "g_frames": g_frames,
+            "bpm_frames": bpm_frames,
+            "h_sc": h_sc,
+            "sys_bounds": sys_bounds,
+            "sys_y_tops": sys_y_tops,
+            "sheet_1080_gray": sheet_1080_gray,
+            "stat_sheets": stat_sheets,
+            "stat_paper_strips": stat_paper_strips,
+            "stat_ink_strips": stat_ink_strips,
+            "sys_nhs": sys_nhs,
+            "sys_traj": sys_traj,
+            "smooth_kern": smooth_kern,
+            "xs_w": xs_w,
+            "env_w": env_w,
+            "font_lg": font_lg,
+            "font_md": font_md,
+            "font_sm": font_sm,
+        })
+
+        # 6. Stream top video (1080x608) from ffmpeg decoder, composite with 8-worker bottom stream,
+        # and encode final 1080x1920 H.264 + 192k AAC MP4 (< 48 MB, capped to <= half physical cores)
+        dec_cmd = [
+            "ffmpeg", "-v", "error", "-threads", "4",
+            "-i", ref_video_path,
+            "-vf", "scale=1080:608:flags=lanczos",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ]
+        enc_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", "1080x1920", "-r", "30000/1001", "-i", "-",
+            "-i", wav_ab_master,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-threads", "6",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "24",
+            "-maxrate", "1300k", "-bufsize", "2600k",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", str(EXPORT_SR),
+            "-movflags", "+faststart",
+            "-shortest",
+            out_video_path,
+        ]
+
+
+        top_frame_bytes = 1080 * 608 * 3
+        n_workers = min(8, max(1, (os.cpu_count() or 8) // 2))
+        dec_proc = subprocess.Popen(dec_cmd, stdout=subprocess.PIPE, bufsize=top_frame_bytes * 4)
+        enc_proc = subprocess.Popen(enc_cmd, stdin=subprocess.PIPE, bufsize=1080 * 1920 * 3 * 2)
+
+        try:
+            ctx_mp = mp.get_context("fork")
+            with ctx_mp.Pool(processes=n_workers) as pool:
+                for badge_state, bot_bytes in pool.imap(_render_video_frame_worker, range(n_frames), chunksize=16):
+                    assert dec_proc.stdout is not None and enc_proc.stdin is not None
+                    raw_top = dec_proc.stdout.read(top_frame_bytes)
+                    if len(raw_top) < top_frame_bytes:
+                        break
+                    top_arr = np.frombuffer(raw_top, dtype=np.uint8).reshape(608, 1080, 3).copy()
+                    b_rgb, b_a = badges[badge_state]
+                    roi = top_arr[18:64, 648:1060].astype(np.float32)
+                    top_arr[18:64, 648:1060] = np.clip(roi * (1.0 - b_a) + b_rgb * b_a, 0, 255).astype(np.uint8)
+                    enc_proc.stdin.write(top_arr.tobytes())
+                    enc_proc.stdin.write(bot_bytes)
+        finally:
+            if enc_proc.stdin:
+                enc_proc.stdin.close()
+            if dec_proc.stdout:
+                dec_proc.stdout.close()
+            dec_proc.wait()
+            enc_rc = enc_proc.wait()
+            assert enc_rc == 0, f"FFmpeg video encoding failed with exit code {enc_rc}"
+
+    assert os.path.isfile(out_video_path) and os.path.getsize(out_video_path) > 10_000_000, (
+        f"Showcase video output invalid: {out_video_path}"
+    )
 
 
 if __name__ == "__main__":
     score = build_score()
-    compile_to_midi(score, "extraordinary.mid")
+    t_map, g_map = build_dynamic_time_map(score, "original_from_youtube.mp4")
+    compile_to_midi(score, "extraordinary.mid", t_of_g=t_map)
     export_markdown_score(score, "CHORD_REDUCTION_SCORE.md")
-    export_sheet_music_png(score, "extraordinary_sheet_music.png")
-    synthesize_and_master_audio("extraordinary.mid", "extraordinary.mp3")
+    all_noteheads, system_bounds, sheet_gray_1080 = export_sheet_music_png(score, "extraordinary_sheet_music.png")
+    master_stereo_48k = synthesize_and_master_audio("extraordinary.mid", "extraordinary.mp3")
+    render_showcase_video(
+        score,
+        t_map,
+        g_map,
+        master_stereo_48k,
+        all_noteheads,
+        system_bounds,
+        sheet_gray_1080,
+        ref_video_path="original_from_youtube.mp4",
+        out_mp3_path="extraordinary.mp3",
+        out_video_path="extraordinary_showcase.mp4",
+    )
     print(
         "Successfully compiled extraordinary.mid, CHORD_REDUCTION_SCORE.md, "
-        "extraordinary_sheet_music.png, and 96 kHz mastered extraordinary.mp3."
+        "extraordinary_sheet_music.png, 96 kHz mastered extraordinary.mp3, "
+        "and portrait mobile showcase video extraordinary_showcase.mp4."
     )
+
 

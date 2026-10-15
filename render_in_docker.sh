@@ -13,8 +13,10 @@ trap cleanup EXIT
 echo "[1/3] Building version-pinned Docker image (${IMAGE_TAG})..."
 docker build -t "${IMAGE_TAG}" "${SCRIPT_DIR}"
 
-echo "[2/3] Running first-principles symbolic compilation, LilyPond sheet music engraving & 96 kHz mastering..."
+echo "[2/3] Running first-principles symbolic compilation, dynamic rubato alignment, LilyPond engraving, 96 kHz mastering & portrait showcase video render (pinned to <= 50% physical cores: 4 P-cores + 8 E-cores)..."
 docker run --rm --network=none \
+    --cpuset-cpus="4-7,16-23" \
+    --cpus="12" \
     -u "$(id -u):$(id -g)" \
     -v "${SCRIPT_DIR}:/workspace" \
     "${IMAGE_TAG}"
@@ -24,9 +26,12 @@ test -s "${SCRIPT_DIR}/extraordinary.mid"
 test -s "${SCRIPT_DIR}/extraordinary.mp3"
 test -s "${SCRIPT_DIR}/extraordinary_sheet_music.png"
 test -s "${SCRIPT_DIR}/CHORD_REDUCTION_SCORE.md"
+test -s "${SCRIPT_DIR}/extraordinary_showcase.mp4"
 ls -lh \
     "${SCRIPT_DIR}/extraordinary.mid" \
     "${SCRIPT_DIR}/extraordinary.mp3" \
     "${SCRIPT_DIR}/extraordinary_sheet_music.png" \
-    "${SCRIPT_DIR}/CHORD_REDUCTION_SCORE.md"
+    "${SCRIPT_DIR}/CHORD_REDUCTION_SCORE.md" \
+    "${SCRIPT_DIR}/extraordinary_showcase.mp4"
 echo "Done."
+
