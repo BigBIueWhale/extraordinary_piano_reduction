@@ -10,6 +10,7 @@
 - 🎬 **Source Performance**: [A Mortal's Journey「不凡 Extraordinary」Ru's Piano Cover (YouTube)](https://youtu.be/JB31Aq_5Slw) *(single non-duplicated 1080p MP4 reference [`original_from_youtube.mp4`](original_from_youtube.mp4) included strictly for musical research, dynamic time alignment, A/B comparison, and archival backup purposes)*
 - ⚙️ **Unified Generator, Dynamic Rubato Aligner, LilyPond Engraver, 96 kHz Mastering & Video Engine**: **[`extraordinary_reduction.py`](extraordinary_reduction.py)**
 - 🚀 **Do It Yourself with OpenRouter (Step-by-Step Agentic Blueprint)**: **[`OPENROUTER_GUIDE.md`](OPENROUTER_GUIDE.md)** *(Complete guide, standalone Python multimodal OpenRouter agent, 7-stage DSP/LilyPond/video architecture breakdown, and copy-paste master prompt)*
+- 🔍 **Forensic Documentation of the Transcription & Tool Workflow**: **[`TRANSCRIPTION_WORKFLOW.md`](TRANSCRIPTION_WORKFLOW.md)** *(Step-indexed audit from `transcript_full.jsonl` documenting exact model inputs, `transkun` neural AMT seeding, `librosa.cqt` verification rounds, LilyPond visual audits, and OpenRouter reproduction requirements)*
 
 ---
 

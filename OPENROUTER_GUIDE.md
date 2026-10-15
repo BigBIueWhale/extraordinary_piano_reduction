@@ -154,13 +154,16 @@ if __name__ == "__main__":
 
 Below is the exact architecture used in this repository so you can instruct your OpenRouter agent to replicate it step by step.
 
+> [!IMPORTANT]
+> **Forensic Ground Truth ([`TRANSCRIPTION_WORKFLOW.md`](TRANSCRIPTION_WORKFLOW.md))**: Do **not** expect a single audio-to-LLM call on OpenRouter to output 2,104 accurate piano notes directly from raw audio. As documented step-by-step in [`TRANSCRIPTION_WORKFLOW.md`](TRANSCRIPTION_WORKFLOW.md), the actual workflow that produced this repository used **`transkun`** (a pretrained neural piano transcription model run inside a temporary Docker container) + `pretty_midi` onset clustering + `librosa.cqt` spectral verification to extract the initial 2,024-note symbolic scaffold (`transkun_raw.mid` $\to$ `clusters_dump.txt`), and then used the LLM + CQT + native audio listening + LilyPond visual auditing across multiple rounds to compress and refine that noisy scaffold into clean, playable first-principles musical functors.
+
 ```mermaid
 flowchart TD
-    A["1. Source Video Acquisition\n(yt-dlp 1080p MP4 -> original_from_youtube.mp4)"] --> B["2. Structural & Harmonic Analysis\n(Downbeat Grid BAR_BOUNDARIES + CQT/Chroma + Audio Listening)"]
+    A["1. Source Video Acquisition\n(yt-dlp 1080p MP4 -> original_from_youtube.mp4)"] --> B["2. Neural AMT Seed + DSP Analysis\n(transkun -> transkun_raw.mid + 1,042 Onset Clusters + librosa.cqt + Audio Listening)"]
     B --> C["3. First-Principles Symbolic Reduction ('PNG -> SVG')\n(16th-Note Algebra, 8 LH Functors, RH Voicing Operators, Virtual Pianist)"]
     A --> D["4. Continuous Sub-Bar Rubato Alignment\n(Multi-Band Onset Flux + 930-Knot Viterbi DP + C1 PCHIP Spline t(g))"]
     C --> D
-    C --> E["5. GNU LilyPond 2.24 Engraving & PDF /Rect Extraction\n(400 DPI Tall Sheet Music PNG + Exact Vector Notehead Coordinates)"]
+    C --> E["5. GNU LilyPond 2.24 Engraving & 4-Round Visual Audit\n(400 DPI Tall Sheet Music PNG + Exact Vector /Rect Notehead Coordinates)"]
     D --> F["6. 96 kHz / 64-Bit Float Concert-Grand Mastering\n(Dual SoundFont FluidSynth + 24-Mode String Resonance + Hall IR)"]
     E --> G["7. Portrait 9:16 Showcase Video Renderer\n(Premultiplied-Alpha 'Breeze of Air' + -14 LUFS Showmanship A/B Switcher)"]
     F --> G
@@ -169,7 +172,7 @@ flowchart TD
 
 ---
 
-### Stage 1: Reference Acquisition & Bar-Boundary Mapping
+### Stage 1: Reference Acquisition, `transkun` Neural Seed & Bar-Boundary Mapping
 
 1. **Single Non-Duplicated Reference Video (`original_from_youtube.mp4`)**:
    - Download the 1080p MP4 once using `yt-dlp`:
@@ -177,18 +180,20 @@ flowchart TD
      yt-dlp -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]" \
        --merge-output-format mp4 -o original_from_youtube.mp4 "https://youtu.be/<VIDEO_ID>"
      ```
-   - Do **not** commit duplicate `.mp3` or `.wav` files to the repo; extract audio in-memory or in `/tmp` via `ffmpeg` whenever needed.
-2. **Mapping Measure Downbeats (`BAR_BOUNDARIES`) & End-Card Replay**:
-   - Have the agent write a short Python script using `scipy.signal.stft` (spectral flux + bass-register CQT energy around `40–200 Hz`) combined with multimodal audio listening (`15–20s` slices) to determine:
-     - The exact timestamp of each measure's Beat 1 (`BAR_BOUNDARIES`: $N_{\text{bars}} + 1$ timestamps).
-     - Whether the video has a post-performance **End-Card Replay** (e.g. in Ru's video, `0.81s – 225.20s` is the 116-bar performance, `225.20s – 233.89s` is silence/applause, and `233.89s – 257.38s` replays Bars 62–73 shifted by `ENDCARD_OFFSET_SEC = 171.370s`, discovered via chroma cross-correlation).
+2. **Initial Neural Piano Transcription Seed (`transkun`) + Onset Clustering (`pretty_midi`)**:
+   - Inside a temporary Docker container (`pip install transkun pretty_midi librosa music21`), run `transkun` on the extracted WAV audio to produce an initial raw MIDI file (`transkun_raw.mid`):
+     ```bash
+     transkun /workspace/original_audio.wav /workspace/transkun_raw.mid
+     ```
+   - Group simultaneous note onsets within `45 ms` (`n.start - cur[0].start <= 0.045`) into onset clusters (`clusters_dump.txt`), filter bass attacks (`pitch <= 50`, `D3`) to locate every measure's Beat 1 downbeat (`BAR_BOUNDARIES`), and quantize each bar `[t0, t1]` onto a 16-step (`0..15`) 16th-note grid.
+   - Use `librosa.cqt` + native audio listening to verify downbeats (for example, catching syncopated Beat 4& RH chord anticipations that precede the true Beat 1 LH bass octave) and chroma cross-correlation to detect any End-Card replay offset (`ENDCARD_OFFSET_SEC = 171.370s`).
 
 ---
 
 ### Stage 2: First-Principles Symbolic Reduction ("PNG → SVG")
 
-> [!IMPORTANT]
-> **Why raw MIDI scrapers fail**: Neural piano transcription models (`basic-pitch`, `kong-piano-transcription`, `omnizart`) output noisy "raster" data—thousands of unquantized floating-point timestamps (`0.813s, 1.042s`), pedal bleed re-triggers, harmonic overtone false positives, and arbitrary velocities. If you feed that into LilyPond, you get unreadable notation soup; if you resynthesize it, it sounds mechanical.
+> [!NOTE]
+> **Why raw `transkun_raw.mid` is only the starting point ("PNG"), not the final score ("SVG")**: Neural piano transcription outputs floating-point onset timestamps (`0.813s, 1.042s`), missed sustain-pedal holds across 2-bar phrases, pedal-bleed re-triggers, unplayable >1-octave left-hand stretches, and arbitrary per-note velocities. Feeding `transkun_raw.mid` directly into LilyPond produces unreadable notation; resynthesizing it directly achieved lower CQT/Chroma similarity (`0.7438` CQT / `0.8501` Chroma) than our refined symbolic reduction (`0.7587` CQT / `0.8734` Chroma).
 
 Instead, instruct the OpenRouter agent to perform **Kolmogorov compression into musical primitives**:
 
