@@ -1,7 +1,7 @@
 # How to Build This Yourself with OpenRouter: End-to-End Agentic Blueprint
 
 This guide explains how **Natan** (or anyone with an [OpenRouter](https://openrouter.ai/) API key) can reproduce this entire workflow from scratch on **any piano performance video**—going from a raw YouTube URL to:
-1. A **first-principles symbolic piano reduction** ("PNG → SVG" / Kolmogorov-compressed Python DSL in ~400 bytes of underlying musical logic),
+1. A **first-principles symbolic piano reduction** ("PNG → SVG": a Python DSL of reusable functors whose complete musical content packs into the 765-byte [`extraordinary.k`](extraordinary.k)),
 2. **Continuous sub-bar dynamic rubato synchronization** (locking every MIDI note and pedal event to the performer's exact millisecond timing via Viterbi dynamic programming + $C^1$ Hermite splines),
 3. **Publication-grade GNU LilyPond sheet music** (`extraordinary_sheet_music.png`) with exact vector `/Rect` notehead coordinates and zero notation collisions,
 4. **96 kHz / 64-bit float dual-SoundFont physical concert-grand mastering** (`extraordinary.mp3`), and
@@ -296,7 +296,7 @@ Standard FluidSynth output at 44.1 kHz with a single GM SoundFont sounds boxy an
 1. **Three-Tier Portrait Layout (`1080 × 1920`, `9:16`)**:
    - **Top (`y = 0..608`)**: Uncropped `16:9` 1080p source video (`1080 × 608`) with a translucent top-right live audio badge.
    - **Middle (`y = 608..752`)**: Dark obsidian Studio HUD (`1080 × 144`) containing:
-     - Side-by-side **Showmanship Audio A/B Switcher Pills** (`RU'S ORIGINAL PIANO (YouTube)` in Imperial Amethyst vs. `398-BYTE FIRST-PRINCIPLES RENDER` in Jade & Gold).
+     - Side-by-side **Showmanship Audio A/B Switcher Pills** (`RU'S ORIGINAL PIANO (YouTube)` in Imperial Amethyst vs. `OUR FIRST-PRINCIPLES RENDER` in Jade & Gold).
      - A dedicated **Live Harmonic Breeze Waveform** lane (`y = 678..708`) that never overlaps text.
      - Bottom telemetry bar (`y = 716..742`) showing `Bar N / 116 · Section`, centered `Chord · ♩=BPM (instant rubato) · Dynamic`, and right-aligned deduplicated `LH / RH` active pitches.
    - **Bottom (`y = 752..1920`)**: `1080 × 1168` sheet-music viewport showing **5 complete 4-bar systems** at once.

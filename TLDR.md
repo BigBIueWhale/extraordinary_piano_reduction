@@ -6,7 +6,7 @@
    - I wrote Python scripts (`pretty_midi`, `librosa.cqt`, `music21`) to dump those 2,024 notes into text tables (`clusters_dump.txt`) and quantized them onto a 16th-note grid. **That's where 95%+ of the notes came from.**
 
 2. **What Gemini *actually* did:**
-   - Read the text dump of `transkun`'s MIDI notes and refactored the repetitive bars into clean Python functions ("398 bytes" of loops/functors).
+   - Read the text dump of `transkun`'s MIDI notes and refactored the repetitive bars into clean Python functions (loops/functors). The "398 bytes" the README once quoted for them was a paper estimate that was never built; the real, measured file is [`extraordinary.k`](extraordinary.k), **765 bytes**, and `python3 kplay.py --verify` proves it holds every note.
    - Used `librosa.cqt` scripts + 1 native audio listen (Step 111, only after being prompted to use innate audio abilities) to fix a few shifted downbeats (Bars 25–28) and clean up voicings.
    - Looked at PNG crops of the LilyPond sheet music across 4 rounds to fix ugly notation and compress unplayable >1-octave left-hand stretches.
    - Wrote the `scipy`/FluidSynth/Pillow/FFmpeg code for the 96 kHz audio mastering, Viterbi beat alignment, and portrait video.

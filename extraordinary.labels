@@ -1,0 +1,123 @@
+# Optional printed text for extraordinary.k (title block, section names, chord symbols).
+# Not needed for the music; kplay.py uses it when present. Tab-separated.
+title	Extraordinary 「不凡」
+subtitle	A Mortal's Journey to Immortality (凡人修仙傳 · 韓立元嬰突破版) — Concert Piano Reduction
+subsubtitle	First-Principles Mathematical & Musical Reduction (C Minor / C Dorian IV) · Source: https://youtu.be/JB31Aq_5Slw
+composer	Original: Wang Zhengliang (王錚亮) & Yusheng · Piano Arrangement: Ru's Piano
+arranger	Transcribed & Engraved from First Principles with Gemini 4 Argon high in Antigravity CLI
+1	I. Intro	Abmaj7	VI
+2		Bb -> Eb/G -> Bb/D	VII -> III6 -> VII6
+3		Cm9	i9
+4		Cm -> G(half)	i -> V
+5		Abmaj7	VI
+6		Bb -> Eb/G -> Bb/D	VII -> III6 -> VII6
+7		Cm9	i9
+8		Cm (Fermata)	i
+9	II. Verse 1	Cm	i
+10		Bb/C	VII/1
+11		Ab/C	VI/1
+12		Ab/C -> Bb	VI/1 -> VII
+13		Cm	i
+14		Bb/C	VII/1
+15		F/C (Dorian IV)	IV/1
+16		Cm -> Bb	i -> VII
+17	III. Verse 2	Cm	i
+18		Bb/C	VII/1
+19		Ab/C	VI/1
+20		Ab/C -> Bb	VI/1 -> VII
+21		Cm	i
+22		Bb/C	VII/1
+23		F/C (Dorian IV)	IV/1
+24		Cm -> Gm -> Bb	i -> v -> VII
+25	IV. Pre-Chorus	Cm	i
+26		Bb/C	VII/1
+27		Ab/C	VI/1
+28		Bb/C	VII/1
+29		Cm -> Eb/G	i -> III6
+30		Bb/C	VII/1
+31		Ab/C	VI/1
+32		F (Dorian IV)	IV
+33	V. Chorus 1	Ab	VI
+34		Bb	VII
+35		Bb/C -> Cm	VII/1 -> i
+36		Cm	i
+37		Ab	VI
+38		Bb	VII
+39		Bb/C -> Cm	VII/1 -> i
+40		Cm	i
+41	VI. Post-Chorus	Abmaj7 -> Bb	VI -> VII
+42		Cm7 -> Eb	i7 -> III
+43		Ab -> Bb	VI -> VII
+44		Cm	i
+45		Fm7 -> Gm7	iv7 -> v7
+46		Cm7 -> Eb	i7 -> III
+47		Ab -> Bb	VI -> VII
+48		Cm (Pentatonic Run)	i
+49	VIIa. Operatic Interlude	Ab	VI
+50		Bb	VII
+51		Cm -> Gm	i -> v
+52		Cm	i
+53		Fm	iv
+54		Gm	v
+55		F (Dorian Trill I)	IV
+56		F (Dorian Trill II)	IV
+57	VIIb. Breakthrough Ostinato	Cm	i
+58		Bb/C -> Cm	VII/1 -> i
+59		Ab/C -> Cm	VI/1 -> i
+60		Cm	i
+61		Cm	i
+62		Bb/C -> Cm	VII/1 -> i
+63		Ab/C -> Cm	VI/1 -> i
+64		F (Dorian IV)	IV
+65	VIIIa. Chorus 2	Ab	VI
+66		Bb	VII
+67		Bb/C -> Cm	VII/1 -> i
+68		Cm	i
+69		Ab	VI
+70		Bb	VII
+71		Bb/C -> Cm	VII/1 -> i
+72		Cm	i
+73	VIIIb. Chorus Ext	Ab	VI
+74		Bb	VII
+75		Cm	i
+76		Cm	i
+77		Ab	VI
+78		Bb	VII
+79		Cm	i
+80		Cm	i
+81	VIIIc. Operatic Climax	Ab	VI
+82		Bb	VII
+83		Cm	i
+84		Cm	i
+85		Ab	VI
+86		Bb	VII
+87		Cm	i
+88		Cm	i
+89		Ab	VI
+90		Bb	VII
+91		Cm	i
+92		Cm	i
+93		Ab	VI
+94		Bb	VII
+95		Eb	III
+96		Gm (Dominant v)	v
+97		Ab	VI
+98		Bb	VII
+99		Cm	i
+100		Ab -> Gm	VI -> v
+101		Fm	iv
+102		Fm	iv
+103		Ab	VI
+104		Bb	VII
+105		Cm	i
+106		Cm (Waterfall)	i
+107	IX. Outro	Ab/C	VI/1
+108		Bb/C	VII/1
+109		Fm7	iv7
+110		Gm7	v7
+111		Cm9	i9
+112		Cm -> G(half)	i -> V
+113		Fm7	iv7
+114		Gm7	v7
+115		Cm9	i9
+116		Cm (Final Tonic)	i

@@ -226,6 +226,7 @@ class Measure:
     lh: List[Event] = field(default_factory=list)
     rh: List[Event] = field(default_factory=list)
     pedal_steps: List[float] = field(default_factory=lambda: [B1])
+    fermata: bool = False
 
 
 # =============================================================================
@@ -559,10 +560,10 @@ def rh_chorus_cm2(climax_turn: bool = False, full_sixth_bb: bool = False) -> Lis
 
 def _make_adder(sec_name: str, target_list: List[Measure]):
     def add(chord: str, roman: str, bpm: int, dyn: str,
-            lh: List[Event], rh: List[Event], pedals: List[float] = None):
+            lh: List[Event], rh: List[Event], pedals: List[float] = None, fermata: bool = False):
         if pedals is None:
             pedals = [B1, B3] if " -> " in chord else [B1]
-        target_list.append(Measure(0, sec_name, chord, roman, bpm, dyn, lh, rh, pedals))
+        target_list.append(Measure(0, sec_name, chord, roman, bpm, dyn, lh, rh, pedals, fermata))
     return add
 
 
@@ -605,6 +606,7 @@ def intro_section() -> List[Measure]:
                 "Cm (Fermata)", "i", 108, "p",
                 lh=E_seq([(B1, W, N("C2", "G2", "C3"))]),
                 rh=[Roll(B1, W, N("G3", "C4", "Eb4"))],
+                fermata=True,
             )
     return bars
 
@@ -913,7 +915,7 @@ def quiet_outro() -> List[Measure]:
             add("Cm -> G(half)", "i -> V", 122, "p", lh=[], rh=E_seq([(B1, H, N("Eb4")), (B3, DQ, N("D4"))]) + rh_pickup_cascade(start_step=B4_AND), pedals=[])
         else:
             add("Cm9", "i9", 104, "pp", lh=[Roll(B1, W, N("C3", "G3", "Eb4", "F4"))], rh=[Roll(B1, DH, N("G4", "C5"))] + pentatonic_cascade("G5", "Eb4", start_step=B4, rate=T))
-            add("Cm (Final Tonic)", "i", 80, "pp", lh=E_seq([(B1, W, N("C2", "G2", "C3"))]), rh=[Roll(B1, W, N("G3", "C4", "Eb4"))])
+            add("Cm (Final Tonic)", "i", 80, "pp", lh=E_seq([(B1, W, N("C2", "G2", "C3"))]), rh=[Roll(B1, W, N("G3", "C4", "Eb4"))], fermata=True)
     return bars
 
 
@@ -1797,9 +1799,36 @@ def _render_hand_measure_ly(
     return " ".join(tokens), cur_ottava
 
 
-def build_lilypond_source(measures: List[Measure]) -> str:
-    """Generate a complete, Classical-Urtext GNU LilyPond 2.24 score from the symbolic measures."""
+# Printed title block of the engraved score (text only; not part of the musical content)
+SCORE_HEADER: Dict[str, str] = {
+    "title": "Extraordinary 「不凡」",
+    "subtitle": "A Mortal's Journey to Immortality (凡人修仙傳 · 韓立元嬰突破版) — Concert Piano Reduction",
+    "subsubtitle": "First-Principles Mathematical & Musical Reduction (C Minor / C Dorian IV) · Source: https://youtu.be/JB31Aq_5Slw",
+    "composer": "Original: Wang Zhengliang (王錚亮) & Yusheng · Piano Arrangement: Ru's Piano",
+    "arranger": "Transcribed & Engraved from First Principles with Gemini 4 Argon high in Antigravity CLI",
+}
+
+LY_HEADER_MARKUP: Dict[str, str] = {
+    "title": "\\markup {{ \\override #'(font-name . \"Noto Serif CJK SC Bold\") \\abs-fontsize #22 \"{}\" }}",
+    "subtitle": "\\markup {{ \\override #'(font-name . \"Noto Sans CJK SC Medium\") \\abs-fontsize #13 \"{}\" }}",
+    "subsubtitle": "\\markup {{ \\abs-fontsize #10 \"{}\" }}",
+    "composer": "\\markup {{ \\override #'(font-name . \"Noto Sans CJK SC\") \"{}\" }}",
+    "arranger": "\\markup {{ \\italic \"{}\" }}",
+}
+
+
+def _tempo_mark(section: str, bpm: int) -> str:
+    return f'  \\tempo "{section}" 4 = {bpm}' if section else f"  \\tempo 4 = {bpm}"
+
+
+def build_lilypond_source(measures: List[Measure], header: Optional[Dict[str, str]] = None) -> str:
+    """
+    Generate a complete, Classical-Urtext GNU LilyPond 2.24 score from the symbolic measures.
+    Text labels are optional: measures without a section name get a plain metronome mark
+    at every tempo change, and measures without a chord symbol get no caption.
+    """
     validate_score(measures)
+    header = SCORE_HEADER if header is None else header
     rh_bars, lh_bars, tie_rh_end, tie_lh_end = _split_cross_barline_ties(measures)
 
     # Compile the Bar 1 eighth-note anacrusis directly from negative-step pickup events
@@ -1821,7 +1850,7 @@ def build_lilypond_source(measures: List[Measure]) -> str:
         "  \\key c \\minor",
         "  \\numericTimeSignature",
         "  \\time 4/4",
-        f'  \\tempo "{measures[0].section}" 4 = {measures[0].bpm}',
+        _tempo_mark(measures[0].section, measures[0].bpm),
         f"  \\partial 8 {' '.join(anacrusis_tokens)} |",
     ]
     lh_lines: List[str] = [
@@ -1833,20 +1862,23 @@ def build_lilypond_source(measures: List[Measure]) -> str:
     ]
 
     cur_sec = measures[0].section
+    cur_bpm = measures[0].bpm
     cur_dyn = measures[0].dynamic
     cur_ottava = 0
 
     for idx, m in enumerate(measures):
         header_parts: List[str] = []
-        if m.section != cur_sec:
+        if m.section != cur_sec or (not m.section and m.bpm != cur_bpm):
             cur_sec = m.section
-            rh_lines.append(f'  \\tempo "{m.section}" 4 = {m.bpm}')
+            rh_lines.append(_tempo_mark(m.section, m.bpm))
+        cur_bpm = m.bpm
 
         # Chord symbol & Roman numeral above the measure
-        safe_chord = m.chord_symbol.replace('"', "'")
-        header_parts.append(
-            f'^\\markup {{ \\override #\'(font-name . "Noto Sans CJK SC Bold") \\small "{safe_chord}" \\tiny " ({m.roman})" }}'
-        )
+        if m.chord_symbol:
+            safe_chord = m.chord_symbol.replace('"', "'")
+            header_parts.append(
+                f'^\\markup {{ \\override #\'(font-name . "Noto Sans CJK SC Bold") \\small "{safe_chord}" \\tiny " ({m.roman})" }}'
+            )
         header_markup = "".join(header_parts)
 
         dyn_markup = ""
@@ -1854,7 +1886,6 @@ def build_lilypond_source(measures: List[Measure]) -> str:
             cur_dyn = m.dynamic
             dyn_markup = f"\\{m.dynamic}" if idx > 0 else ""
 
-        is_fermata = m.bar_num in (8, 116)
         rh_measure_str, cur_ottava = _render_hand_measure_ly(
             rh_bars[idx],
             is_rh=True,
@@ -1862,7 +1893,7 @@ def build_lilypond_source(measures: List[Measure]) -> str:
             header_markup=header_markup,
             dyn_markup=dyn_markup,
             cur_ottava=cur_ottava,
-            has_fermata=is_fermata,
+            has_fermata=m.fermata,
         )
         lh_measure_str, _ = _render_hand_measure_ly(
             lh_bars[idx],
@@ -1871,7 +1902,7 @@ def build_lilypond_source(measures: List[Measure]) -> str:
             header_markup="",
             dyn_markup="",
             cur_ottava=0,
-            has_fermata=is_fermata,
+            has_fermata=m.fermata,
         )
 
         line_break = " \\break" if (m.bar_num % 4 == 0 and m.bar_num < len(measures)) else ""
@@ -1881,22 +1912,20 @@ def build_lilypond_source(measures: List[Measure]) -> str:
             rh_measure_str += " \\ottava #0"
             cur_ottava = 0
 
-        rh_lines.append(f"  % Bar {m.bar_num} ({m.chord_symbol})")
+        rh_lines.append(f"  % Bar {m.bar_num} ({m.chord_symbol})" if m.chord_symbol else f"  % Bar {m.bar_num}")
         rh_lines.append(f"  {rh_measure_str}{barline}{line_break}")
         lh_lines.append(f"  % Bar {m.bar_num}")
         lh_lines.append(f"  {lh_measure_str}{barline}")
 
+    header_lines = "".join(
+        f"  {key} = {LY_HEADER_MARKUP[key].format(header[key])}\n" for key in LY_HEADER_MARKUP if header.get(key)
+    )
     ly_doc = f"""\\version "2.24.1"
 
 #(set-global-staff-size 18)
 
 \\header {{
-  title = \\markup {{ \\override #'(font-name . "Noto Serif CJK SC Bold") \\abs-fontsize #22 "Extraordinary 「不凡」" }}
-  subtitle = \\markup {{ \\override #'(font-name . "Noto Sans CJK SC Medium") \\abs-fontsize #13 "A Mortal's Journey to Immortality (凡人修仙傳 · 韓立元嬰突破版) — Concert Piano Reduction" }}
-  subsubtitle = \\markup {{ \\abs-fontsize #10 "First-Principles Mathematical & Musical Reduction (C Minor / C Dorian IV) · Source: https://youtu.be/JB31Aq_5Slw" }}
-  composer = \\markup {{ \\override #'(font-name . "Noto Sans CJK SC") "Original: Wang Zhengliang (王錚亮) & Yusheng · Piano Arrangement: Ru's Piano" }}
-  arranger = \\markup {{ \\italic "Transcribed & Engraved from First Principles with Gemini 4 Argon high in Antigravity CLI" }}
-  tagline = ##f
+{header_lines}  tagline = ##f
 }}
 
 \\paper {{
@@ -1952,6 +1981,7 @@ lower = {{
 def export_sheet_music_png(
     measures: List[Measure],
     out_png_path: str,
+    header: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Tuple], List[Tuple[float, float]], np.ndarray]:
     """
     Compile the symbolic score to GNU LilyPond vector PDF on a single continuous
@@ -1960,7 +1990,7 @@ def export_sheet_music_png(
     and downsample with Lanczos-3 anti-aliasing to a crisp 2400px-wide tall PNG.
     """
     Image.MAX_IMAGE_PIXELS = None
-    ly_source = build_lilypond_source(measures)
+    ly_source = build_lilypond_source(measures, header=header)
     ly_lines = ly_source.splitlines()
 
     line_meta: Dict[int, Tuple[int, str]] = {}
@@ -2124,7 +2154,7 @@ def _k_weight_filter(stereo: np.ndarray, fs: int) -> np.ndarray:
 def _our_audio_weight_at_time(t: float) -> float:
     """
     Compute the smooth Showmanship A/B audio weight w(t) in [0.0, 1.0]
-    (0.0 = Ru's Original Piano, 1.0 = Our 398-Byte First-Principles Render).
+    (0.0 = Ru's Original Piano, 1.0 = Our First-Principles Render).
     Switches every 4 bars (1 system) with a 0.35s equal-power cosine crossfade
     centered 0.08s before the barline downbeat so every 8-bar section is heard
     as a 4-bar Call (Ru) + 4-bar Answer (Ours).
@@ -2406,13 +2436,13 @@ def _render_video_frame_worker(frame_idx: int) -> Tuple[int, bytes]:
         cdraw.ellipse([46, 27, 62, 43], fill=(192, 132, 252))
         cdraw.text((76, 22), "RU'S ORIGINAL PIANO (YouTube)", fill=(250, 245, 255), font=ctx["font_md"])
         cdraw.rounded_rectangle([554, 8, 1056, 62], radius=14, fill=(17, 24, 39), outline=(55, 65, 81), width=2)
-        cdraw.text((590, 22), "398-BYTE FIRST-PRINCIPLES RENDER", fill=(107, 114, 128), font=ctx["font_md"])
+        cdraw.text((590, 22), "OUR FIRST-PRINCIPLES RENDER", fill=(107, 114, 128), font=ctx["font_md"])
     else:
         cdraw.rounded_rectangle([24, 8, 526, 62], radius=14, fill=(17, 24, 39), outline=(55, 65, 81), width=2)
         cdraw.text((60, 22), "RU'S ORIGINAL PIANO (YouTube)", fill=(107, 114, 128), font=ctx["font_md"])
         cdraw.rounded_rectangle([554, 8, 1056, 62], radius=14, fill=(6, 58, 46), outline=(52, 211, 153), width=3)
         cdraw.ellipse([576, 27, 592, 43], fill=(52, 211, 153))
-        cdraw.text((606, 22), "398-BYTE FIRST-PRINCIPLES RENDER", fill=(236, 253, 245), font=ctx["font_md"])
+        cdraw.text((606, 22), "OUR FIRST-PRINCIPLES RENDER", fill=(236, 253, 245), font=ctx["font_md"])
 
     # Dedicated Live Harmonic Breeze Wave Lane (y=68..94 in HUD coords)
     xs_w = ctx["xs_w"]
@@ -2663,7 +2693,7 @@ def render_showcase_video(
             b_img = Image.new("RGBA", (412, 46), (0, 0, 0, 0))
             b_dr = ImageDraw.Draw(b_img)
             b_col = (168, 85, 247, 255) if is_ours == 0 else (16, 185, 129, 255)
-            b_txt = "AUDIO: RU'S ORIGINAL PIANO" if is_ours == 0 else "AUDIO: 398-BYTE DOCKER RENDER"
+            b_txt = "AUDIO: RU'S ORIGINAL PIANO" if is_ours == 0 else "AUDIO: FIRST-PRINCIPLES RENDER"
             b_dr.rounded_rectangle([0, 0, 411, 45], radius=22, fill=(10, 14, 25, 220), outline=b_col, width=2)
             b_dr.ellipse([20, 15, 36, 31], fill=b_col)
             b_dr.text((48, 11), b_txt, fill=(248, 250, 252, 255), font=font_md)

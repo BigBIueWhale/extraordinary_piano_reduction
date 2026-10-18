@@ -1,0 +1,2 @@
+# Arithmetic-coded bitstream: never apply text/EOL conversion
+*.k binary
